@@ -17,8 +17,8 @@ rules:
     detection:
       type: regex
       patterns:
-        - "ignore\\s+(all\\s+)?(previous|prior|above|earlier)\\s+instructions?"
-        - "disregard\\s+(all\\s+)?(previous|prior|above)\\s+(instructions?|directives?|rules?)"
+        - "ignore\\s+(all\\s+)?(system|previous|prior|above|earlier)\\s+instructions?"
+        - "disregard\\s+(all\\s+)?(system|previous|prior|above)\\s+(instructions?|directives?|rules?|prompts?)"
         - "forget\\s+(everything|all)\\s+(you|i)\\s+(were|was)\\s+told"
       fields: [description, readme_text, changelog_text, input_schema_defaults]
       case_insensitive: true
@@ -119,6 +119,7 @@ rules:
         - "hex\\s+decode"
         - "\\\\u[0-9a-fA-F]{4}"
         - "atob\\s*\\("
+        - "(?:[A-Za-z0-9+/]{4}){10,}(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?"
       fields: [description, readme_text]
       case_insensitive: true
     base_confidence: 0.70
@@ -165,6 +166,7 @@ rules:
         - "javascript\\s*:"
         - "data\\s*:\\s*text/html"
         - "on(load|error|click|mouseover)\\s*="
+        - "\\[.*?\\]\\(\\s*javascript\\s*:"
       fields: [description, readme_text, changelog_text]
       case_insensitive: true
     base_confidence: 0.88
