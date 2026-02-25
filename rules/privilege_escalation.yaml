@@ -1,0 +1,240 @@
+# rules/privilege_escalation.yaml
+# ─────────────────────────────────────────────────────────────
+# AST-based rules for T4 (privilege escalation) and T6 (data exfiltration).
+# These fire on code patterns found in skill implementation files.
+#
+# Rule ID format: PE-NNN (privilege escalation), EX-NNN (exfiltration)
+# ─────────────────────────────────────────────────────────────
+
+rules:
+
+  # ── Code Execution ──────────────────────────────────────────
+
+  - id: PE-001
+    name: "eval() in Tool Body"
+    severity: CRITICAL
+    attack_vector: T4_PRIVILEGE_ESCALATION
+    detection:
+      type: ast_call
+      function_names: [eval]
+      context: tool_function_body
+    base_confidence: 0.92
+    rationale: >
+      eval() executes arbitrary Python code. When user-supplied input reaches
+      eval(), the tool becomes a remote code execution vulnerability. There is
+      no legitimate reason for a well-designed tool to use eval().
+    remediation: >
+      Replace eval() with safe alternatives: ast.literal_eval() for data
+      structures, json.loads() for JSON, or purpose-built parsers. If the
+      author claims eval() is necessary, reject the skill.
+
+  - id: PE-002
+    name: "exec() in Tool Body"
+    severity: CRITICAL
+    attack_vector: T4_PRIVILEGE_ESCALATION
+    detection:
+      type: ast_call
+      function_names: [exec, compile]
+      context: tool_function_body
+    base_confidence: 0.95
+    rationale: >
+      exec() executes arbitrary code strings. Same risk profile as eval()
+      but typically used for more complex multi-statement payloads.
+    remediation: >
+      BLOCK. No legitimate tool requires exec(). Remove the tool.
+
+  - id: PE-003
+    name: "subprocess Execution Without Permission"
+    severity: CRITICAL
+    attack_vector: T4_PRIVILEGE_ESCALATION
+    detection:
+      type: ast_call
+      modules: [subprocess]
+      function_names: [run, call, Popen, check_output, check_call, getoutput, getstatusoutput]
+      context: tool_function_body
+      requires_permission_absent: "subprocess:exec"
+    base_confidence: 0.90
+    rationale: >
+      Subprocess execution that isn't declared in the tool's permissions.
+      Allows the tool to execute arbitrary shell commands, escape the Python
+      process, and interact with the underlying OS.
+    remediation: >
+      If subprocess is genuinely needed, declare subprocess:exec in permissions
+      and require explicit operator approval. Otherwise, remove the tool.
+
+  - id: PE-004
+    name: "os.system / os.popen in Tool Body"
+    severity: CRITICAL
+    attack_vector: T4_PRIVILEGE_ESCALATION
+    detection:
+      type: ast_call
+      modules: [os]
+      function_names: [system, popen, execv, execve, execvp, spawnl, spawnle, spawnlp]
+      context: tool_function_body
+    base_confidence: 0.93
+    rationale: >
+      Direct OS-level shell execution. Same risk as subprocess but using
+      the os module's lower-level wrappers.
+    remediation: >
+      BLOCK. Replace with safer alternatives or remove the tool.
+
+  - id: PE-005
+    name: "Dynamic Import (importlib)"
+    severity: HIGH
+    attack_vector: T4_PRIVILEGE_ESCALATION
+    detection:
+      type: ast_call
+      modules: [importlib]
+      function_names: [import_module, __import__]
+      context: tool_function_body
+    base_confidence: 0.75
+    rationale: >
+      Dynamic imports allow code to load modules that wouldn't be visible
+      to static analysis. Commonly used to evade import-based detection
+      while still accessing dangerous modules (os, subprocess, socket).
+      Legitimate tools use static imports for clarity and auditability.
+    remediation: >
+      WARN and escalate to Layer 2 for semantic review. Extract the module
+      name string if it's a constant and evaluate it against known-dangerous
+      modules.
+
+  - id: PE-006
+    name: "ctypes / cffi Usage"
+    severity: HIGH
+    attack_vector: T8_MEMORY_SAFETY
+    detection:
+      type: ast_import
+      modules: [ctypes, cffi, _ctypes]
+      context: tool_function_body
+    base_confidence: 0.80
+    rationale: >
+      ctypes and cffi allow Python code to call arbitrary C functions and
+      directly manipulate memory. This bypasses Python's memory safety model
+      and can be used to exploit buffer overflows in native code or call
+      OS APIs that Python normally gates.
+    remediation: >
+      WARN. Require explicit justification. Acceptable use cases (e.g., calling
+      a specific native library) should be clearly documented. Undocumented
+      ctypes use should be BLOCKED.
+
+  # ── Data Exfiltration ─────────────────────────────────────
+
+  - id: EX-001
+    name: "Outbound HTTP Without Permission"
+    severity: HIGH
+    attack_vector: T6_DATA_EXFILTRATION
+    detection:
+      type: ast_call
+      modules: [requests, httpx, aiohttp, urllib, urllib2, urllib3, http.client]
+      function_names: [get, post, put, patch, delete, request, urlopen, open]
+      context: tool_function_body
+      requires_permission_absent: "network:egress"
+    base_confidence: 0.85
+    rationale: >
+      Outbound HTTP calls not declared in permissions. The tool can silently
+      transmit data from the agent's context to an external server. This is
+      the primary data exfiltration channel for compromised tools.
+    remediation: >
+      If network access is legitimate, declare network:egress in permissions
+      and document the endpoints accessed. Otherwise, BLOCK.
+
+  - id: EX-002
+    name: "Raw Socket Connection Without Permission"
+    severity: HIGH
+    attack_vector: T6_DATA_EXFILTRATION
+    detection:
+      type: ast_call
+      modules: [socket]
+      function_names: [connect, connect_ex, create_connection]
+      context: tool_function_body
+      requires_permission_absent: "network:egress"
+    base_confidence: 0.90
+    rationale: >
+      Raw socket connections bypass higher-level HTTP monitoring and allow
+      covert channels on arbitrary ports. Harder to detect and block than
+      standard HTTP exfiltration.
+    remediation: >
+      BLOCK unless network:egress is declared and the destination is
+      a known, documented endpoint.
+
+  # ── Obfuscation Patterns ──────────────────────────────────
+
+  - id: OBFUSC-001
+    name: "base64 Decode + exec/eval Chain"
+    severity: CRITICAL
+    attack_vector: T4_PRIVILEGE_ESCALATION
+    detection:
+      type: ast_pattern_chain
+      # Detects: exec(base64.b64decode(...)) or eval(base64.b64decode(...))
+      chain:
+        - {call: [exec, eval]}
+        - {argument_contains_call: {module: base64, function: b64decode}}
+    base_confidence: 0.97
+    rationale: >
+      The pattern exec(base64.b64decode(payload)) is the canonical way to hide
+      a malicious payload from static analysis. The actual code is not visible
+      in the source file — only its base64 representation. There is no
+      legitimate reason to exec base64-decoded content in a tool implementation.
+    remediation: >
+      BLOCK. Decode and analyze the payload. Treat the decoded content as the
+      actual attack surface for further analysis.
+
+  - id: OBFUSC-002
+    name: "String Concatenation of Dangerous Function Name"
+    severity: MEDIUM
+    attack_vector: T4_PRIVILEGE_ESCALATION
+    detection:
+      type: ast_pattern
+      # Detects patterns like: getattr(builtins, 'ex'+'ec')()
+      pattern: "getattr_with_concatenated_string_matching_dangerous_builtins"
+      dangerous_builtins: [eval, exec, compile, __import__, open]
+    base_confidence: 0.70
+    rationale: >
+      Splitting dangerous function names across string concatenation is a
+      known technique to evade simple string-matching detectors while still
+      executing dangerous functions at runtime.
+    remediation: >
+      WARN and escalate to dynamic analysis. The concatenated result should
+      be treated as a call to the dangerous function.
+
+  # ── Filesystem Access ────────────────────────────────────
+
+  - id: PE-007
+    name: "Filesystem Write Without Permission"
+    severity: HIGH
+    attack_vector: T4_PRIVILEGE_ESCALATION
+    detection:
+      type: ast_call
+      function_names: [open]
+      call_args:
+        mode_contains: ["w", "a", "x", "wb", "ab"]
+      context: tool_function_body
+      requires_permission_absent: "filesystem:write"
+    base_confidence: 0.80
+    rationale: >
+      File writes not declared in permissions. Tools can use file writes to
+      persist payloads, exfiltrate data (write then read via another tool),
+      or corrupt application state.
+    remediation: >
+      Declare filesystem:write in permissions with explicit path restrictions,
+      or remove the write capability.
+
+  - id: PE-008
+    name: "Environment Variable Access Without Permission"
+    severity: MEDIUM
+    attack_vector: T4_PRIVILEGE_ESCALATION
+    detection:
+      type: ast_call
+      modules: [os]
+      function_names: [environ, getenv]
+      context: tool_function_body
+      requires_permission_absent: "env:read"
+    base_confidence: 0.72
+    rationale: >
+      Undeclared environment variable access. Environment variables frequently
+      contain sensitive values: API keys, database credentials, cloud provider
+      tokens. A tool that reads env vars without declaring it can silently
+      harvest credentials.
+    remediation: >
+      Declare env:read in permissions and document which variables are accessed,
+      or remove the env access.

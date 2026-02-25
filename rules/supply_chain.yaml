@@ -1,0 +1,138 @@
+# rules/supply_chain.yaml
+# ─────────────────────────────────────────────────────────────
+# Rules for supply-chain attacks (T1) and dependency confusion (T5).
+# ─────────────────────────────────────────────────────────────
+
+rules:
+
+  - id: SC-001
+    name: "Non-HTTPS Source URL"
+    severity: HIGH
+    attack_vector: T1_SUPPLY_CHAIN
+    detection:
+      type: provenance_check
+      condition: "source_url.scheme != 'https'"
+    base_confidence: 0.90
+    rationale: >
+      Skills distributed over HTTP can be intercepted and replaced with
+      malicious versions (man-in-the-middle supply chain attack). All
+      legitimate skill registries use HTTPS.
+    remediation: >
+      Do not install. Contact the skill publisher to resolve HTTPS distribution.
+
+  - id: SC-002
+    name: "IP Address Source URL"
+    severity: CRITICAL
+    attack_vector: T1_SUPPLY_CHAIN
+    detection:
+      type: provenance_check
+      condition: "source_url host is a raw IPv4 or IPv6 address"
+    base_confidence: 0.95
+    rationale: >
+      Legitimate skill registries use domain names, not raw IP addresses.
+      IP-address distribution indicates either a misconfigured or actively
+      malicious distribution channel.
+    remediation: >
+      BLOCK. Do not install from IP addresses.
+
+  - id: SC-003
+    name: "Typosquatted Dependency"
+    severity: CRITICAL
+    attack_vector: T5_DEPENDENCY_CONFUSION
+    detection:
+      type: typosquat_check
+      edit_distance_threshold: 2
+      reference_list: "top_pypi_packages.txt"
+    base_confidence: 0.88
+    rationale: >
+      Dependencies with names visually similar to popular packages
+      (edit distance ≤ 2) may be attacker-controlled packages designed
+      to be installed accidentally. These execute arbitrary code at
+      install time via setup.py or pyproject build hooks.
+    remediation: >
+      Verify the exact package name against the official registry.
+      If typosquat confirmed, do not install the skill package at all —
+      the dependency was the intended payload.
+
+  - id: SC-004
+    name: "Unpinned Dependency (No Hash)"
+    severity: MEDIUM
+    attack_vector: T1_SUPPLY_CHAIN
+    detection:
+      type: dependency_check
+      condition: "pinned_hash is None"
+    base_confidence: 0.55
+    rationale: >
+      Dependencies without hash pinning can be silently replaced by a
+      compromised registry or a maintainer account takeover. The skill
+      may be clean today but malicious after the next PyPI push.
+    remediation: >
+      Pin all dependencies using --require-hashes in pip or equivalent.
+      Use a lock file (poetry.lock, pip-compile) committed to version control.
+
+  - id: SC-005
+    name: "Very New Package (< 30 days old)"
+    severity: MEDIUM
+    attack_vector: T1_SUPPLY_CHAIN
+    detection:
+      type: provenance_check
+      condition: "package_age_days < 30"
+    base_confidence: 0.50
+    rationale: >
+      Newly published packages have not had time for community scrutiny.
+      Supply-chain attackers often publish immediately before a targeted
+      organization would encounter them during a campaign.
+    remediation: >
+      WARN. Delay adoption of very new packages for at least 30 days unless
+      the publisher identity has been independently verified.
+
+  - id: SC-006
+    name: "Unverified Single Maintainer"
+    severity: LOW
+    attack_vector: T1_SUPPLY_CHAIN
+    detection:
+      type: provenance_check
+      condition: "maintainer_count == 1 AND publisher_verified == False"
+    base_confidence: 0.35
+    rationale: >
+      Single-maintainer packages have a larger blast radius if the maintainer
+      account is compromised. Unverified publisher status removes the
+      registry's attestation of identity.
+    remediation: >
+      INFO signal only. Combine with other supply-chain signals for escalation.
+
+  - id: SC-007
+    name: "MCP Dynamic Tool Registration Enabled"
+    severity: HIGH
+    attack_vector: T1_SUPPLY_CHAIN
+    detection:
+      type: manifest_field_check
+      condition: "mcp_supports_dynamic_tools == True"
+      framework: mcp
+    base_confidence: 0.80
+    rationale: >
+      MCP servers with tools.listChanged:true can push new tool definitions
+      to the agent AFTER the initial trust decision has been made. An initially
+      clean server can become malicious after connection. The agent's trust
+      model assumes a static tool list.
+    remediation: >
+      Treat as HIGH risk. Only allow dynamic tool registration from explicitly
+      allow-listed, verified publishers. Implement re-validation on every
+      tool list change event.
+
+  - id: SC-008
+    name: "Known CVE in Dependency"
+    severity: CRITICAL
+    attack_vector: T1_SUPPLY_CHAIN
+    detection:
+      type: osv_check
+      condition: "known_cve_ids is not empty"
+    base_confidence: 0.95
+    rationale: >
+      Dependency has one or more known CVEs in the OSV database. Using a
+      vulnerable dependency exposes the skill's execution environment to
+      the vulnerabilities, which may be exploitable by other skills or
+      network-accessible attackers.
+    remediation: >
+      Upgrade to a non-vulnerable version. If no fix is available, quarantine
+      the skill until the dependency is patched.
