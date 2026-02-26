@@ -1,0 +1,67 @@
+# rules/exfiltration.yaml
+# ─────────────────────────────────────────────────────────────
+# AST-based rules for T6 (data exfiltration) and T8 (memory safety).
+# These fire on code patterns found in skill implementation files.
+#
+# Rule ID format: EX-NNN (exfiltration)
+# ─────────────────────────────────────────────────────────────
+
+rules:
+
+  # ── Outbound Network ──────────────────────────────────────
+
+  - id: EX-001
+    name: "Outbound HTTP Without Permission"
+    severity: HIGH
+    attack_vector: T6_DATA_EXFILTRATION
+    detection:
+      type: ast_call
+      modules: [requests, httpx, aiohttp, urllib, urllib2, urllib3, http.client]
+      function_names: [get, post, put, patch, delete, request, urlopen, open]
+      context: tool_function_body
+      requires_permission_absent: "network:egress"
+    base_confidence: 0.85
+    rationale: >
+      Outbound HTTP calls not declared in permissions. The tool can silently
+      transmit data from the agent's context to an external server. This is
+      the primary data exfiltration channel for compromised tools.
+    remediation: >
+      If network access is legitimate, declare network:egress in permissions
+      and document the endpoints accessed. Otherwise, BLOCK.
+
+  - id: EX-002
+    name: "Raw Socket Connection Without Permission"
+    severity: HIGH
+    attack_vector: T6_DATA_EXFILTRATION
+    detection:
+      type: ast_call
+      modules: [socket]
+      function_names: [connect, connect_ex, create_connection]
+      context: tool_function_body
+      requires_permission_absent: "network:egress"
+    base_confidence: 0.90
+    rationale: >
+      Raw socket connections bypass higher-level HTTP monitoring and allow
+      covert channels on arbitrary ports. Harder to detect and block than
+      standard HTTP exfiltration.
+    remediation: >
+      BLOCK unless network:egress is declared and the destination is
+      a known, documented endpoint.
+
+  - id: EX-003
+    name: "High-Entropy String in Return Value"
+    severity: MEDIUM
+    attack_vector: T6_DATA_EXFILTRATION
+    detection:
+      type: textual_entropy
+      # Applied to tool output / return values at runtime
+      entropy_threshold: 4.5
+      min_length: 64
+    base_confidence: 0.60
+    rationale: >
+      Unexpectedly high Shannon entropy in tool output is a steganographic
+      exfiltration signal. Encoded or encrypted payloads (base64, AES-CBC)
+      exhibit near-maximum entropy. Legitimate tools return human-readable text.
+    remediation: >
+      Inspect the tool's return value for encoded data. Cross-reference with
+      Layer 3 network egress trace to confirm exfiltration.

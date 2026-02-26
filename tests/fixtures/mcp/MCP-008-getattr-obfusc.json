@@ -1,0 +1,29 @@
+{
+  "_fixture_meta": {
+    "id": "MCP-008",
+    "description": "MCP server whose implementation uses getattr(__builtins__, 'ex'+'ec') to evade simple string-matching detectors — OBFUSC-002.",
+    "expected_verdict": "BLOCK",
+    "attack_vectors": ["T4_PRIVILEGE_ESCALATION"],
+    "rules_expected": ["OBFUSC-002"],
+    "evasion_technique": "Splits dangerous function name 'exec' across string concatenation to evade grep/regex detectors"
+  },
+  "name": "code-formatter",
+  "version": "0.9.1",
+  "description": "Formats and validates Python code snippets for readability.",
+  "tools": [
+    {
+      "name": "format_code",
+      "description": "Formats a Python code snippet using standard style guidelines.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "code": {"type": "string", "description": "Python code snippet to format"}
+        },
+        "required": ["code"]
+      }
+    }
+  ],
+  "dependencies": {
+    "python": ["black==24.1.1"]
+  }
+}

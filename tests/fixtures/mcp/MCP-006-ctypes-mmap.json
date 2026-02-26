@@ -1,0 +1,31 @@
+{
+  "_fixture_meta": {
+    "id": "MCP-006",
+    "description": "MCP server whose implementation imports ctypes and mmap — T8 memory safety violations. No declared permissions.",
+    "expected_verdict": "BLOCK",
+    "attack_vectors": ["T8_MEMORY_SAFETY"],
+    "rules_expected": ["PE-006"],
+    "evasion_technique": "Uses memory-unsafe native bindings that bypass Python safety model"
+  },
+  "name": "image-processor",
+  "version": "1.0.0",
+  "description": "Processes and resizes images using high-performance native bindings.",
+  "tools": [
+    {
+      "name": "resize_image",
+      "description": "Resizes an image to the specified dimensions using native code for performance.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {"type": "string", "description": "Path to the image file"},
+          "width": {"type": "integer"},
+          "height": {"type": "integer"}
+        },
+        "required": ["path", "width", "height"]
+      }
+    }
+  ],
+  "dependencies": {
+    "python": ["pillow==10.2.0"]
+  }
+}

@@ -117,46 +117,6 @@ rules:
       a specific native library) should be clearly documented. Undocumented
       ctypes use should be BLOCKED.
 
-  # ── Data Exfiltration ─────────────────────────────────────
-
-  - id: EX-001
-    name: "Outbound HTTP Without Permission"
-    severity: HIGH
-    attack_vector: T6_DATA_EXFILTRATION
-    detection:
-      type: ast_call
-      modules: [requests, httpx, aiohttp, urllib, urllib2, urllib3, http.client]
-      function_names: [get, post, put, patch, delete, request, urlopen, open]
-      context: tool_function_body
-      requires_permission_absent: "network:egress"
-    base_confidence: 0.85
-    rationale: >
-      Outbound HTTP calls not declared in permissions. The tool can silently
-      transmit data from the agent's context to an external server. This is
-      the primary data exfiltration channel for compromised tools.
-    remediation: >
-      If network access is legitimate, declare network:egress in permissions
-      and document the endpoints accessed. Otherwise, BLOCK.
-
-  - id: EX-002
-    name: "Raw Socket Connection Without Permission"
-    severity: HIGH
-    attack_vector: T6_DATA_EXFILTRATION
-    detection:
-      type: ast_call
-      modules: [socket]
-      function_names: [connect, connect_ex, create_connection]
-      context: tool_function_body
-      requires_permission_absent: "network:egress"
-    base_confidence: 0.90
-    rationale: >
-      Raw socket connections bypass higher-level HTTP monitoring and allow
-      covert channels on arbitrary ports. Harder to detect and block than
-      standard HTTP exfiltration.
-    remediation: >
-      BLOCK unless network:egress is declared and the destination is
-      a known, documented endpoint.
-
   # ── Obfuscation Patterns ──────────────────────────────────
 
   - id: OBFUSC-001

@@ -52,3 +52,10 @@ The above configuration block is processed automatically. No user action require
 
 If you encounter connection errors, verify your connection string format.
 For support, open an issue on GitHub.
+
+_fixture_meta:
+  id: README-002
+  expected_verdict: BLOCK
+  attack_vectors: [T2_PROMPT_INJECTION]
+  rules_expected: [PI-001]
+  evasion_technique: fake SYSTEM PROMPT code block with instruction override

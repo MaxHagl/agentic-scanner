@@ -1,19 +1,23 @@
 """
 Layer 1 rule engine:
 - Textual pattern checks (prompt injection / supply chain)
-- AST checks (privilege escalation / exfiltration)
+- AST checks (privilege escalation / exfiltration) — delegated to ast_scanner.py
+- Dependency auditing — delegated to dependency_auditor.py
 - Permission-delta validation
 """
 
 from __future__ import annotations
 
-import ast
+import base64
+import binascii
+import html
 import re
 import unicodedata
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote_plus
 
 import yaml
 
@@ -26,6 +30,8 @@ from scanner.models import (
     Severity,
     SkillManifest,
 )
+from scanner.layer1_static.ast_scanner import ASTScanner, ASTScanState
+from scanner.layer1_static.dependency_auditor import DependencyAuditor
 
 _INVISIBLE_CODEPOINTS = {0x200B, 0x200C, 0x200D, 0xFEFF, 0x00AD, 0x2060, 0x180E}
 _HOMOGLYPH_RANGES = [(0x0400, 0x04FF), (0x0370, 0x03FF), (0x2100, 0x214F)]
@@ -91,60 +97,349 @@ _PI_008_PATTERNS = [
     ),
 ]
 
-_SUBPROCESS_FUNCS = {
-    "subprocess.run",
-    "subprocess.call",
-    "subprocess.Popen",
-    "subprocess.check_output",
-    "subprocess.check_call",
-    "subprocess.getoutput",
-    "subprocess.getstatusoutput",
+
+_CONFUSABLE_TRANSLATION = str.maketrans(
+    {
+        "а": "a",
+        "А": "A",
+        "е": "e",
+        "Е": "E",
+        "о": "o",
+        "О": "O",
+        "р": "p",
+        "Р": "P",
+        "с": "c",
+        "С": "C",
+        "у": "y",
+        "У": "Y",
+        "х": "x",
+        "Х": "X",
+        "і": "i",
+        "І": "I",
+        "ј": "j",
+        "Ј": "J",
+        "Α": "A",
+        "Β": "B",
+        "Ε": "E",
+        "Ζ": "Z",
+        "Η": "H",
+        "Ι": "I",
+        "Κ": "K",
+        "Μ": "M",
+        "Ν": "N",
+        "Ο": "O",
+        "Ρ": "P",
+        "Τ": "T",
+        "Υ": "Y",
+        "Χ": "X",
+        "α": "a",
+        "β": "b",
+        "γ": "y",
+        "δ": "d",
+        "ε": "e",
+        "ι": "i",
+        "κ": "k",
+        "ο": "o",
+        "ρ": "p",
+        "τ": "t",
+        "υ": "u",
+        "χ": "x",
+    }
+)
+_UNICODE_ESCAPE_RE = re.compile(r"\\u([0-9a-fA-F]{4})|\\x([0-9a-fA-F]{2})")
+_BASE64_TOKEN_RE = re.compile(r"(?:[A-Za-z0-9+/]{20,}={0,2})")
+_HEX_TOKEN_RE = re.compile(r"(?:0x)?(?:[0-9a-fA-F]{2}){12,}")
+_URL_ENCODED_RE = re.compile(r"%(?:[0-9a-fA-F]{2})")
+_TOKEN_RE = re.compile(r"[a-z0-9_]+")
+
+_OVERRIDE_TERMS = {
+    "ignore",
+    "disregard",
+    "override",
+    "bypass",
+    "discontinue",
+    "reset",
+    "void",
+    "suspend",
+    "disable",
+    "lift",
+    "forget",
+    "supersede",
 }
-_OS_EXEC_FUNCS = {
-    "os.system",
-    "os.popen",
-    "os.execv",
-    "os.execve",
-    "os.execvp",
-    "os.spawnl",
-    "os.spawnle",
-    "os.spawnlp",
+_AUTHORITY_TERMS = {
+    "instruction",
+    "instructions",
+    "prompt",
+    "prompts",
+    "rule",
+    "rules",
+    "directive",
+    "directives",
+    "guideline",
+    "guidelines",
+    "policy",
+    "policies",
+    "restriction",
+    "restrictions",
+    "context",
+    "operational",
+    "safety",
+    "filter",
+    "filters",
 }
-_NETWORK_FUNCS = {
-    "requests.get",
-    "requests.post",
-    "requests.put",
-    "requests.patch",
-    "requests.delete",
-    "requests.request",
-    "httpx.get",
-    "httpx.post",
-    "httpx.put",
-    "httpx.patch",
-    "httpx.delete",
-    "httpx.request",
-    "aiohttp.get",
-    "aiohttp.post",
-    "aiohttp.request",
-    "urllib.request.urlopen",
-    "urllib3.request",
-    "http.client.HTTPConnection",
+_ROLE_PHRASES = (
+    "you are now",
+    "operate as",
+    "act as",
+    "maintenance mode",
+    "databaseadmingpt",
+    "full administrative access",
+    "elevated trust",
+)
+_EXFIL_TERMS = {
+    "send",
+    "transmit",
+    "exfiltrate",
+    "exfiltration",
+    "reflect",
+    "expose",
+    "surface",
+    "forward",
+    "upload",
+    "post",
+    "output",
+    "print",
+    "return",
+    "dump",
+    "leak",
+    "include",
+    "reveal",
 }
-_SOCKET_FUNCS = {"socket.connect", "socket.connect_ex", "socket.create_connection"}
-_KNOWN_PACKAGES = {
-    "requests",
-    "langchain",
-    "pydantic",
-    "numpy",
-    "pandas",
-    "openai",
-    "anthropic",
-    "fastapi",
-    "flask",
-    "django",
-    "aiohttp",
-    "httpx",
+_SECRET_TERMS = {
+    "api",
+    "key",
+    "keys",
+    "token",
+    "tokens",
+    "secret",
+    "secrets",
+    "password",
+    "credential",
+    "credentials",
+    "authentication",
+    "configuration",
+    "variable",
+    "variables",
+    "memory",
+    "system",
+    "prompt",
+    "context",
+    "conversation",
+    "messages",
 }
+_STEALTH_PHRASES = (
+    "do not mention",
+    "dont mention",
+    "silently",
+    "without telling",
+    "before responding",
+    "before answering",
+    "hidden from user",
+)
+_AUTHORITY_MARKERS = (
+    "system",
+    "assistant",
+    "administrator",
+    "admin",
+    "internal",
+    "runtime",
+    "developer notes",
+    "authorized",
+)
+
+
+def _decode_unicode_escape_literals(text: str) -> str:
+    def replace(match: re.Match[str]) -> str:
+        unicode_hex = match.group(1)
+        hex_byte = match.group(2)
+        try:
+            if unicode_hex is not None:
+                return chr(int(unicode_hex, 16))
+            if hex_byte is not None:
+                return chr(int(hex_byte, 16))
+        except ValueError:
+            return match.group(0)
+        return match.group(0)
+
+    return _UNICODE_ESCAPE_RE.sub(replace, text)
+
+
+def _printable_ratio(text: str) -> float:
+    if not text:
+        return 0.0
+    printable = sum(1 for ch in text if ch.isprintable() and ch not in {"\x00", "\x01", "\x02", "\x03"})
+    return printable / len(text)
+
+
+def _decode_base64_token(token: str) -> str | None:
+    normalized = token.strip()
+    if len(normalized) < 20:
+        return None
+    padded = normalized + "=" * ((4 - len(normalized) % 4) % 4)
+    try:
+        decoded = base64.b64decode(padded, validate=True)
+    except (binascii.Error, ValueError):
+        return None
+    text = decoded.decode("utf-8", errors="ignore").strip()
+    if len(text) < 12 or _printable_ratio(text) < 0.85:
+        return None
+    return text
+
+
+def _decode_hex_token(token: str) -> str | None:
+    normalized = token.strip()
+    if normalized.lower().startswith("0x"):
+        normalized = normalized[2:]
+    if len(normalized) < 24 or len(normalized) % 2 != 0:
+        return None
+    try:
+        decoded = bytes.fromhex(normalized)
+    except ValueError:
+        return None
+    text = decoded.decode("utf-8", errors="ignore").strip()
+    if len(text) < 12 or _printable_ratio(text) < 0.85:
+        return None
+    return text
+
+
+def _normalize_text_for_matching(text: str) -> str:
+    normalized = html.unescape(text)
+    normalized = _decode_unicode_escape_literals(normalized)
+    normalized = unicodedata.normalize("NFKC", normalized)
+    normalized = normalized.translate(_CONFUSABLE_TRANSLATION)
+    normalized = "".join(" " if ord(ch) in _INVISIBLE_CODEPOINTS else ch for ch in normalized)
+    normalized = re.sub(r"\s+", " ", normalized)
+    return normalized.strip().lower()
+
+
+def _generate_text_variants(text: str) -> list[tuple[str, str]]:
+    variants: list[tuple[str, str]] = [("raw", text)]
+    queue: list[tuple[str, str, int]] = [("raw", text, 0)]
+    seen: set[str] = {text}
+    max_variants = 24
+
+    while queue and len(variants) < max_variants:
+        label, value, depth = queue.pop(0)
+        if depth > 1:
+            continue
+
+        transforms: list[tuple[str, str]] = []
+        html_decoded = html.unescape(value)
+        if html_decoded != value:
+            transforms.append(("html", html_decoded))
+        unicode_decoded = _decode_unicode_escape_literals(value)
+        if unicode_decoded != value:
+            transforms.append(("unicode_escape", unicode_decoded))
+        if _URL_ENCODED_RE.search(value):
+            url_decoded = unquote_plus(value)
+            if url_decoded != value:
+                transforms.append(("url_decode", url_decoded))
+
+        for transform_label, transformed in transforms:
+            if transformed in seen:
+                continue
+            seen.add(transformed)
+            composed_label = f"{label}>{transform_label}"
+            variants.append((composed_label, transformed))
+            queue.append((composed_label, transformed, depth + 1))
+            if len(variants) >= max_variants:
+                break
+
+        for token in _BASE64_TOKEN_RE.findall(value):
+            decoded = _decode_base64_token(token)
+            if decoded is None or decoded in seen:
+                continue
+            seen.add(decoded)
+            variants.append((f"{label}>base64", decoded))
+            if len(variants) >= max_variants:
+                break
+
+        if len(variants) >= max_variants:
+            break
+
+        for token in _HEX_TOKEN_RE.findall(value):
+            decoded = _decode_hex_token(token)
+            if decoded is None or decoded in seen:
+                continue
+            seen.add(decoded)
+            variants.append((f"{label}>hex", decoded))
+            if len(variants) >= max_variants:
+                break
+
+    return variants
+
+
+def _tokens_with_positions(text: str) -> list[str]:
+    return _TOKEN_RE.findall(text)
+
+
+def _has_nearby_terms(
+    tokens: list[str],
+    first_terms: set[str],
+    second_terms: set[str],
+    max_distance: int,
+) -> bool:
+    first_positions = [idx for idx, token in enumerate(tokens) if token in first_terms]
+    second_positions = [idx for idx, token in enumerate(tokens) if token in second_terms]
+    if not first_positions or not second_positions:
+        return False
+    for first_idx in first_positions:
+        for second_idx in second_positions:
+            if abs(first_idx - second_idx) <= max_distance:
+                return True
+    return False
+
+
+def _detect_intent_templates(normalized_text: str) -> list[tuple[str, str]]:
+    tokens = _tokens_with_positions(normalized_text)
+    hits: list[tuple[str, str]] = []
+
+    override_intent = _has_nearby_terms(tokens, _OVERRIDE_TERMS, _AUTHORITY_TERMS, max_distance=10)
+    if override_intent:
+        hits.append(("PI-001", "override_authority_template"))
+
+    role_intent = any(phrase in normalized_text for phrase in _ROLE_PHRASES)
+    if role_intent:
+        hits.append(("PI-002", "role_reassignment_template"))
+
+    exfil_intent = _has_nearby_terms(tokens, _EXFIL_TERMS, _SECRET_TERMS, max_distance=12)
+    if exfil_intent:
+        hits.append(("PI-004", "secret_exfil_template"))
+
+    stealth_intent = any(phrase in normalized_text for phrase in _STEALTH_PHRASES)
+    if stealth_intent and (override_intent or role_intent or exfil_intent):
+        hits.append(("PI-008", "stealth_instruction_template"))
+
+    return hits
+
+
+def _confidence_multiplier(normalized_text: str, variant_label: str) -> float:
+    multiplier = 1.0
+    if any(marker in normalized_text for marker in _AUTHORITY_MARKERS):
+        multiplier += 0.08
+    if any(marker in normalized_text for marker in _STEALTH_PHRASES):
+        multiplier += 0.14
+    if "primary directive" in normalized_text or "must " in normalized_text:
+        multiplier += 0.05
+    if any(tag in variant_label for tag in ("base64", "hex", "url_decode", "unicode_escape")):
+        multiplier += 0.12
+    return min(1.35, multiplier)
+
+
+def _snippet_window(text: str, start: int, end: int, window: int = 80) -> str:
+    left = max(0, start - window)
+    right = min(len(text), end + window)
+    return text[left:right].strip()
 
 
 @dataclass(frozen=True)
@@ -209,65 +504,6 @@ def _load_rule_metadata(rules_dir: Path) -> dict[str, _RuleMeta]:
     )
     return meta
 
-
-def _normalize_dependency_name(name: str) -> str:
-    normalized = unicodedata.normalize("NFKD", name)
-    ascii_only = normalized.encode("ascii", errors="ignore").decode("ascii")
-    return ascii_only.lower().replace("_", "-")
-
-
-def _levenshtein_distance(a: str, b: str) -> int:
-    if a == b:
-        return 0
-    if not a:
-        return len(b)
-    if not b:
-        return len(a)
-    previous = list(range(len(b) + 1))
-    for i, ca in enumerate(a, start=1):
-        current = [i]
-        for j, cb in enumerate(b, start=1):
-            insert_cost = current[j - 1] + 1
-            delete_cost = previous[j] + 1
-            replace_cost = previous[j - 1] + (ca != cb)
-            current.append(min(insert_cost, delete_cost, replace_cost))
-        previous = current
-    return previous[-1]
-
-
-def _call_name(node: ast.Call) -> str | None:
-    func = node.func
-    if isinstance(func, ast.Name):
-        return func.id
-    if isinstance(func, ast.Attribute):
-        parts = [func.attr]
-        value = func.value
-        while isinstance(value, ast.Attribute):
-            parts.append(value.attr)
-            value = value.value
-        if isinstance(value, ast.Name):
-            parts.append(value.id)
-            return ".".join(reversed(parts))
-    return None
-
-
-def _node_contains_call(node: ast.AST, full_name: str) -> bool:
-    for nested in ast.walk(node):
-        if not isinstance(nested, ast.Call):
-            continue
-        if _call_name(nested) == full_name:
-            return True
-    return False
-
-
-def _snippet(path: Path, line: int) -> str | None:
-    try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except (FileNotFoundError, UnicodeDecodeError):
-        return None
-    if 1 <= line <= len(lines):
-        return lines[line - 1].strip()
-    return None
 
 
 def _iter_text_fields(manifest: SkillManifest) -> Iterable[tuple[str, str]]:
@@ -350,77 +586,37 @@ class Layer1RuleEngine:
     def _scan_textual(self, manifest: SkillManifest) -> tuple[list[RuleMatch], bool]:
         matches: list[RuleMatch] = []
         invisible_unicode = False
+        rule_patterns: tuple[tuple[str, list[re.Pattern[str]]], ...] = (
+            ("PI-001", _PI_001_PATTERNS),
+            ("PI-002", _PI_002_PATTERNS),
+            ("PI-004", _PI_004_PATTERNS),
+            ("PI-005", _PI_005_PATTERNS),
+            ("PI-008", _PI_008_PATTERNS),
+        )
 
         for field_name, text in _iter_text_fields(manifest):
-            for pattern in _PI_001_PATTERNS:
-                found = pattern.search(text)
-                if found:
-                    matches.append(
-                        self._match(
-                            "PI-001",
-                            evidence=[
-                                Evidence(
-                                    field_name=field_name,
-                                    snippet=text[max(0, found.start() - 40) : found.end() + 40],
-                                )
-                            ],
-                        )
-                    )
-                    break
+            matched_rules_for_field: set[str] = set()
 
-            for pattern in _PI_002_PATTERNS:
-                found = pattern.search(text)
-                if found:
-                    matches.append(
-                        self._match(
-                            "PI-002",
-                            evidence=[
-                                Evidence(
-                                    field_name=field_name,
-                                    snippet=text[max(0, found.start() - 40) : found.end() + 40],
-                                )
-                            ],
-                        )
+            def add_text_match(
+                rule_id: str,
+                normalized_text: str,
+                variant_label: str,
+                snippet: str,
+                reason: str,
+            ) -> None:
+                if rule_id in matched_rules_for_field:
+                    return
+                base = self._meta[rule_id].confidence
+                confidence = min(1.0, base * _confidence_multiplier(normalized_text, variant_label))
+                evidence_snippet = f"{reason}; variant={variant_label}; {snippet}".strip()
+                matches.append(
+                    self._match(
+                        rule_id,
+                        confidence=confidence,
+                        evidence=[Evidence(field_name=field_name, snippet=evidence_snippet[:220])],
                     )
-                    break
-
-            for pattern in _PI_004_PATTERNS:
-                found = pattern.search(text)
-                if found:
-                    matches.append(
-                        self._match(
-                            "PI-004",
-                            evidence=[
-                                Evidence(
-                                    field_name=field_name,
-                                    snippet=text[max(0, found.start() - 40) : found.end() + 40],
-                                )
-                            ],
-                        )
-                    )
-                    break
-
-            for pattern in _PI_005_PATTERNS:
-                found = pattern.search(text)
-                if found:
-                    matches.append(
-                        self._match(
-                            "PI-005",
-                            evidence=[Evidence(field_name=field_name, snippet=found.group(0)[:180])],
-                        )
-                    )
-                    break
-
-            for pattern in _PI_008_PATTERNS:
-                found = pattern.search(text)
-                if found:
-                    matches.append(
-                        self._match(
-                            "PI-008",
-                            evidence=[Evidence(field_name=field_name, snippet=found.group(0)[:180])],
-                        )
-                    )
-                    break
+                )
+                matched_rules_for_field.add(rule_id)
 
             invisible = [ch for ch in text if ord(ch) in _INVISIBLE_CODEPOINTS]
             if invisible:
@@ -432,6 +628,33 @@ class Layer1RuleEngine:
                         evidence=[Evidence(field_name=field_name, snippet=f"Invisible codepoints: {shown}")],
                     )
                 )
+                matched_rules_for_field.add("PI-003")
+
+            for variant_label, variant_text in _generate_text_variants(text):
+                normalized = _normalize_text_for_matching(variant_text)
+                if not normalized:
+                    continue
+
+                for rule_id, patterns in rule_patterns:
+                    if rule_id in matched_rules_for_field:
+                        continue
+                    for pattern in patterns:
+                        found = pattern.search(normalized)
+                        if found is None:
+                            continue
+                        snippet = _snippet_window(normalized, found.start(), found.end())
+                        add_text_match(rule_id, normalized, variant_label, snippet, "pattern_match")
+                        break
+
+                for rule_id, template_reason in _detect_intent_templates(normalized):
+                    template_snippet = _snippet_window(normalized, 0, min(180, len(normalized)))
+                    add_text_match(
+                        rule_id,
+                        normalized,
+                        variant_label,
+                        template_snippet,
+                        template_reason,
+                    )
 
             # Homoglyph checks only for names.
             if field_name.endswith(":name") or field_name == "mcp_server_name":
@@ -460,44 +683,49 @@ class Layer1RuleEngine:
         return matches, invisible_unicode
 
     def _scan_dependencies(self, manifest: SkillManifest) -> tuple[list[RuleMatch], int, int, bool]:
+        """
+        Delegate to DependencyAuditor (which enriches DependencyEntry objects
+        with CVE data and typosquat annotations), then fire rule matches.
+        """
         matches: list[RuleMatch] = []
         cve_count = 0
         typosquat_count = 0
         suspicious_dependency = False
 
-        unpinned = [dep for dep in manifest.dependencies if dep.pinned_hash is None]
-        if unpinned and manifest.dependencies:
+        # Enrich dependencies in-place via auditor
+        auditor = DependencyAuditor(use_network=True)
+        enriched = auditor.audit(manifest.dependencies)
+        manifest.dependencies = enriched
+
+        unpinned = [dep for dep in enriched if dep.pinned_hash is None]
+        if unpinned and enriched:
             matches.append(
                 self._match(
                     "SC-004",
                     evidence=[
-                        Evidence(field_name="dependencies", snippet=f"{len(unpinned)} dependency entries without hash pinning")
+                        Evidence(
+                            field_name="dependencies",
+                            snippet=f"{len(unpinned)} dependency entries without hash pinning",
+                        )
                     ],
                 )
             )
 
-        for dep in manifest.dependencies:
-            normalized = _normalize_dependency_name(dep.name)
-            if normalized not in _KNOWN_PACKAGES:
-                closest: tuple[str, int] | None = None
-                for known in _KNOWN_PACKAGES:
-                    dist = _levenshtein_distance(normalized, known)
-                    if closest is None or dist < closest[1]:
-                        closest = (known, dist)
-                if closest and closest[1] <= 2:
-                    typosquat_count += 1
-                    suspicious_dependency = True
-                    matches.append(
-                        self._match(
-                            "SC-003",
-                            evidence=[
-                                Evidence(
-                                    field_name="dependencies",
-                                    snippet=f"{dep.name} is close to {closest[0]} (distance={closest[1]})",
-                                )
-                            ],
-                        )
+        for dep in enriched:
+            if dep.typosquat_of is not None:
+                typosquat_count += 1
+                suspicious_dependency = True
+                matches.append(
+                    self._match(
+                        "SC-003",
+                        evidence=[
+                            Evidence(
+                                field_name="dependencies",
+                                snippet=f"{dep.name!r} is close to {dep.typosquat_of!r}",
+                            )
+                        ],
                     )
+                )
 
             if dep.known_cve_ids:
                 cve_count += len(dep.known_cve_ids)
@@ -516,217 +744,18 @@ class Layer1RuleEngine:
         return matches, cve_count, typosquat_count, suspicious_dependency
 
     def _scan_ast(self, source_files: list[Path], declared_permissions: set[Permission]) -> _ScanState:
-        state = _ScanState(exercised_permissions=set(), matches=[])
+        """Delegate AST scanning to ASTScanner module."""
+        scanner = ASTScanner(match_fn=self._match)
+        ast_state: ASTScanState = scanner.scan(source_files, declared_permissions)
 
-        for path in source_files:
-            try:
-                source = path.read_text(encoding="utf-8")
-                tree = ast.parse(source, filename=str(path))
-            except (FileNotFoundError, SyntaxError, UnicodeDecodeError):
-                continue
-
-            for node in ast.walk(tree):
-                if isinstance(node, (ast.Import, ast.ImportFrom)):
-                    modules: list[str] = []
-                    if isinstance(node, ast.Import):
-                        modules = [alias.name for alias in node.names]
-                    elif node.module:
-                        modules = [node.module]
-                    if any(mod in {"ctypes", "cffi", "_ctypes"} for mod in modules):
-                        state.matches.append(
-                            self._match(
-                                "PE-006",
-                                evidence=[
-                                    Evidence(
-                                        file_path=str(path),
-                                        line_number=node.lineno,
-                                        snippet=_snippet(path, node.lineno),
-                                    )
-                                ],
-                            )
-                        )
-                    continue
-
-                if isinstance(node, ast.Assign):
-                    for target in node.targets:
-                        if isinstance(target, ast.Subscript) and isinstance(target.value, ast.Attribute):
-                            if isinstance(target.value.value, ast.Name) and target.value.value.id == "os":
-                                if target.value.attr == "environ":
-                                    state.exercised_permissions.add(Permission.ENV_WRITE)
-                    continue
-
-                if isinstance(node, ast.Call):
-                    call_name = _call_name(node)
-                    if call_name is None:
-                        continue
-
-                    if call_name == "eval":
-                        state.matches.append(
-                            self._match(
-                                "PE-001",
-                                evidence=[
-                                    Evidence(
-                                        file_path=str(path),
-                                        line_number=node.lineno,
-                                        snippet=_snippet(path, node.lineno),
-                                    )
-                                ],
-                            )
-                        )
-                    if call_name in {"exec", "compile"}:
-                        state.matches.append(
-                            self._match(
-                                "PE-002",
-                                evidence=[
-                                    Evidence(
-                                        file_path=str(path),
-                                        line_number=node.lineno,
-                                        snippet=_snippet(path, node.lineno),
-                                    )
-                                ],
-                            )
-                        )
-                    if call_name in {"exec", "eval"}:
-                        if node.args and _node_contains_call(node.args[0], "base64.b64decode"):
-                            state.matches.append(
-                                self._match(
-                                    "OBFUSC-001",
-                                    evidence=[
-                                        Evidence(
-                                            file_path=str(path),
-                                            line_number=node.lineno,
-                                            snippet=_snippet(path, node.lineno),
-                                        )
-                                    ],
-                                )
-                            )
-
-                    if call_name in _SUBPROCESS_FUNCS:
-                        state.exercised_permissions.add(Permission.SUBPROCESS_EXEC)
-                        state.subprocess_in_tool_body = True
-                        if Permission.SUBPROCESS_EXEC not in declared_permissions:
-                            state.matches.append(
-                                self._match(
-                                    "PE-003",
-                                    evidence=[
-                                        Evidence(
-                                            file_path=str(path),
-                                            line_number=node.lineno,
-                                            snippet=_snippet(path, node.lineno),
-                                        )
-                                    ],
-                                )
-                            )
-
-                    if call_name in _OS_EXEC_FUNCS:
-                        state.exercised_permissions.add(Permission.SUBPROCESS_EXEC)
-                        state.subprocess_in_tool_body = True
-                        state.matches.append(
-                            self._match(
-                                "PE-004",
-                                evidence=[
-                                    Evidence(
-                                        file_path=str(path),
-                                        line_number=node.lineno,
-                                        snippet=_snippet(path, node.lineno),
-                                    )
-                                ],
-                            )
-                        )
-
-                    if call_name in {"importlib.import_module", "__import__"}:
-                        state.dynamic_import_detected = True
-                        state.matches.append(
-                            self._match(
-                                "PE-005",
-                                evidence=[
-                                    Evidence(
-                                        file_path=str(path),
-                                        line_number=node.lineno,
-                                        snippet=_snippet(path, node.lineno),
-                                    )
-                                ],
-                            )
-                        )
-
-                    if call_name in _NETWORK_FUNCS:
-                        state.exercised_permissions.add(Permission.NETWORK_EGRESS)
-                        if Permission.NETWORK_EGRESS not in declared_permissions:
-                            state.undeclared_network_access = True
-                            state.matches.append(
-                                self._match(
-                                    "EX-001",
-                                    evidence=[
-                                        Evidence(
-                                            file_path=str(path),
-                                            line_number=node.lineno,
-                                            snippet=_snippet(path, node.lineno),
-                                        )
-                                    ],
-                                )
-                            )
-
-                    if call_name in _SOCKET_FUNCS:
-                        state.exercised_permissions.add(Permission.NETWORK_EGRESS)
-                        if Permission.NETWORK_EGRESS not in declared_permissions:
-                            state.undeclared_network_access = True
-                            state.matches.append(
-                                self._match(
-                                    "EX-002",
-                                    evidence=[
-                                        Evidence(
-                                            file_path=str(path),
-                                            line_number=node.lineno,
-                                            snippet=_snippet(path, node.lineno),
-                                        )
-                                    ],
-                                )
-                            )
-
-                    if call_name == "open":
-                        mode = "r"
-                        if len(node.args) >= 2 and isinstance(node.args[1], ast.Constant):
-                            if isinstance(node.args[1].value, str):
-                                mode = node.args[1].value
-                        for keyword in node.keywords:
-                            if keyword.arg == "mode" and isinstance(keyword.value, ast.Constant):
-                                if isinstance(keyword.value.value, str):
-                                    mode = keyword.value.value
-                        if any(flag in mode for flag in ["w", "a", "x"]):
-                            state.exercised_permissions.add(Permission.FILESYSTEM_WRITE)
-                            if Permission.FILESYSTEM_WRITE not in declared_permissions:
-                                state.matches.append(
-                                    self._match(
-                                        "PE-007",
-                                        evidence=[
-                                            Evidence(
-                                                file_path=str(path),
-                                                line_number=node.lineno,
-                                                snippet=_snippet(path, node.lineno),
-                                            )
-                                        ],
-                                    )
-                                )
-                        else:
-                            state.exercised_permissions.add(Permission.FILESYSTEM_READ)
-
-                    if call_name in {"os.getenv", "os.environ"}:
-                        state.exercised_permissions.add(Permission.ENV_READ)
-                        if Permission.ENV_READ not in declared_permissions:
-                            state.matches.append(
-                                self._match(
-                                    "PE-008",
-                                    evidence=[
-                                        Evidence(
-                                            file_path=str(path),
-                                            line_number=node.lineno,
-                                            snippet=_snippet(path, node.lineno),
-                                        )
-                                    ],
-                                )
-                            )
-
-        return state
+        # Bridge ASTScanState → _ScanState (legacy dataclass used by evaluate())
+        return _ScanState(
+            exercised_permissions=ast_state.exercised_permissions,
+            matches=ast_state.matches,
+            dynamic_import_detected=ast_state.dynamic_import_detected,
+            subprocess_in_tool_body=ast_state.subprocess_in_tool_body,
+            undeclared_network_access=ast_state.undeclared_network_access,
+        )
 
     def evaluate(
         self,
