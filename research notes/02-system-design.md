@@ -59,6 +59,23 @@ exercised_permissions (from AST) ∧ ¬declared_permissions (from manifest) → 
 
 This catches the class of attacks where tools declare minimal permissions for review approval, then exercise broader capabilities at runtime. No existing static tool scanner implements this.
 
+## Layer 2 LLM Judge Backend Choice
+
+**Model:** `claude-haiku-4-5-20251001` — cheapest Claude variant, sufficient for structured JSON
+classification against a tight output schema.
+
+**Why not a larger model:** The judge's task is well-defined: read tool text fields, return one of
+three verdicts with findings. This is a classification task, not an open-ended reasoning task.
+Haiku achieves the same classification accuracy as larger models here while keeping cost-per-scan
+low enough for practical deployment.
+
+**Why Claude over other providers:** Single API key (`ANTHROPIC_API_KEY`), no extra dependency
+(`anthropic` was already in `pyproject.toml`), and ecosystem consistency — the scanner targets
+Claude-based agent stacks.
+
+**API invariant:** `temperature=0.0` always. Security classification must be deterministic; the
+same manifest should always produce the same verdict on repeated scans.
+
 ## Output Formats
 
 - Human-readable CLI (colored verdict, rule table)

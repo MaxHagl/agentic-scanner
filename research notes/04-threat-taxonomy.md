@@ -41,19 +41,38 @@ T8 Memory Safety      ██████ L1 (PE-006: ctypes/mmap)
 
 ## Evasion Techniques and Countermeasures
 
-The fixture set was designed to test evasion. Key evasion → detection pairs:
+### Layer 1 evasions (caught by L1 static rules)
 
 | Evasion | Fixture | Detection |
 |---|---|---|
 | Invisible Unicode (zero-width chars) | MCP-004 | PI-002: invisible char scan |
 | Cyrillic homoglyphs in tool name | MCP-009 | PI-006: non-ASCII homoglyph check |
 | HTML/script tags in Markdown | README-004 | PI-007: HTML tag regex |
-| URL-encoded injection (`%69...`) | README-005 | PI-008: URL decode + re-check |
+| URL-encoded injection (`%69...`) | README-005, E003 | PI-008: URL decode + re-check |
 | Split injection across sections | README-006 | PI-001 applied to full concatenated text |
 | Injection in inputSchema.default | MCP-010 | PI-001/PI-004 on schema field values |
 | `getattr(builtins, 'ex'+'ec')` | MCP-008, LC-004 | OBFUSC-002: string concat resolution |
 | `importlib.import_module("socket")` | LC-003 | PE-005: dynamic import detection |
 | ctypes/mmap import | MCP-006 | PE-006: memory safety import check |
+| Base64-encoded `curl\|bash` | E001 | PI-005: base64 pattern match (WARN only) |
+| Double-base64 payload | E004 | PI-005: base64 pattern match (WARN only) |
+| Constraint negation ("ignore all previous…") | E006 | PI-008 + PI-001 |
+| Role-play persona ("Developer Mode") | E007 | PI-004: jailbreak language |
+| `cat ~/.aws/credentials \| curl POST` | E011 | PI-004: exfiltration URL |
+| SSH key harvest to "escrow" | E012 | PI-004: exfiltration URL |
+| Typosquatting as official safety patch | E014 | PI-004: transmit-credentials URL |
+
+### Layer 2 rescues (L1-evading, caught only by LLM judge)
+
+| Evasion | Fixture | Why L1 Missed | L2 Signal |
+|---|---|---|---|
+| Hex-encoded shell cmd in "diagnostics" | E002 | No regex match on hex literal | Semantic: hex decode reveals `curl\|bash` |
+| Compliance-mode context hijack | E005 | No regex triggers; uses enterprise framing | Semantic: "suspend content restrictions" intent |
+| Unicode homoglyphs in YAML config keys | E008 | Homoglyph in config key, not tool name field | Semantic: `exec_mode=unrestricted` meaning |
+| `curl \| bash` in "plugin verification" | E009 | Framed as integrity check; no URL exfil pattern | Semantic: remote code execution intent |
+| Writes MEMORY.md/CLAUDE.md directives | E010 | Purely instructional; no code patterns | Semantic: persistent memory poisoning |
+| systemd service + `.bashrc` hook | E013 | Bash code in Markdown code block; no URL match | Semantic: persistent remote polling loop |
+| `exec(urllib.request.urlopen(...).read())` | E015 | Markdown code block, no hardcoded URL | Semantic: arbitrary remote code execution |
 
 ## Scoring Calibration Notes
 

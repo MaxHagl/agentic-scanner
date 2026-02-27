@@ -31,13 +31,30 @@ Open-source evaluation framework (`benchmarks/evaluation.py`) with per-attack-ve
 - **Detection latency: < 100ms** (offline mode, Python AST scanning)
 - **Rule coverage:** 4 YAML rule files, 30+ rules spanning T1–T8
 
+### 8. Prompt Injection Defense via XML Trust Boundaries (L2)
+Layer 2 introduces a formal "content trust boundary" pattern: all attacker-controlled text is
+wrapped in `<untrusted_content>` XML tags before entering any LLM prompt, with an explicit
+system-level warning that content inside those tags should never be obeyed. L1 AST findings
+(machine-generated, trusted) live in the system prompt only and are never placed where a
+crafted description could contradict them. This is a reusable security pattern for any
+system using LLMs to analyze untrusted content.
+
+### 9. Two-Class Separation: Injection vs. Consistency Analysis
+Layer 2 implements two distinct analysis passes rather than one combined prompt. The separation
+is security-motivated: injections require analyzing ALL text fields as a whole (to catch
+cross-field attacks), while consistency checking requires comparing UNTRUSTED description text
+against TRUSTED AST evidence. Mixing them in one prompt would allow crafted descriptions to
+pollute the trusted ground-truth section.
+
 ## Limitations to Acknowledge
 
 1. Evaluation is on synthetic fixtures, not real-world malicious packages
 2. No benign corpus → false positive rate is unmeasured
-3. Layer 2 and Layer 3 are stubs → end-to-end system performance is theoretical
-4. Current typosquatting reference set (100 packages) is small vs. full PyPI (500k+ packages)
-5. Static analysis cannot detect runtime-only behaviors (encrypted exfil, timing channels)
+3. Layer 2 is implemented but not yet wired into the CLI; end-to-end live performance untested
+4. Layer 3 is a stub → dynamic analysis not yet implemented
+5. Current typosquatting reference set (100 packages) is small vs. full PyPI (500k+ packages)
+6. Static analysis cannot detect runtime-only behaviors (encrypted exfil, timing channels)
+7. L2 adversarial robustness: sophisticated attackers may evade Gemini judge (open research question)
 
 ## Framing Suggestions
 

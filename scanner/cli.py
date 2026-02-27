@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 
@@ -8,7 +9,7 @@ import click
 from rich.console import Console
 from rich.table import Table
 
-from scanner.aggregator import fuse_layer1
+from scanner.aggregator import fuse_layer1, fuse_layers
 from scanner.layer1_static.parser import parse_target
 from scanner.layer1_static.rule_engine import Layer1RuleEngine
 
@@ -41,6 +42,12 @@ def main() -> None:
     help="Directory to recursively scan for Python source files.",
 )
 @click.option(
+    "--semantic",
+    is_flag=True,
+    default=False,
+    help="Run Layer 2 semantic analysis via LLM judge (requires ANTHROPIC_API_KEY).",
+)
+@click.option(
     "--json-output",
     is_flag=True,
     default=False,
@@ -56,6 +63,7 @@ def scan_command(
     target: Path,
     source_files: tuple[Path, ...],
     source_directory: Path | None,
+    semantic: bool,
     json_output: bool,
     sarif_out: Path | None,
 ) -> None:
@@ -70,8 +78,26 @@ def scan_command(
             source_files=[str(p.resolve()) for p in source_files] if source_files else None,
             source_directory=str(source_directory.resolve()) if source_directory else None,
         )
-        verdict = fuse_layer1(manifest, l1_report)
+
+        l2_report = None
+        if semantic:
+            if not os.environ.get("ANTHROPIC_API_KEY"):
+                console.print(
+                    "[bold yellow]Warning:[/bold yellow] --semantic requires ANTHROPIC_API_KEY "
+                    "to be set. Skipping Layer 2."
+                )
+            else:
+                from scanner.layer2_semantic import Layer2Analyzer
+                analyzer = Layer2Analyzer()
+                l2_report = analyzer.analyze(manifest, l1_report)
+
+        if l2_report is not None:
+            verdict = fuse_layers(manifest, l1_report, l2_report)
+        else:
+            verdict = fuse_layer1(manifest, l1_report)
+
         verdict.total_scan_time_ms = int((time.perf_counter() - started) * 1000)
+
     except Exception as exc:
         console.print(f"[bold red]Scan failed:[/bold red] {exc}")
         raise SystemExit(1) from exc
@@ -83,21 +109,41 @@ def scan_command(
     if json_output:
         console.print(json.dumps(verdict.model_dump(mode="json"), indent=2))
     else:
+        style = _verdict_style(verdict.verdict)
         console.print(
-            f"[{_verdict_style(verdict.verdict)}]{verdict.verdict}[/{_verdict_style(verdict.verdict)}] "
+            f"[{style}]{verdict.verdict}[/{style}] "
             f"{verdict.skill_name} ({verdict.framework})"
         )
+        layers_str = " + ".join(verdict.layers_executed)
         console.print(
-            f"Risk score: {verdict.fused_risk_score:.4f} | Confidence: {verdict.confidence:.2f} | Findings: {len(verdict.all_findings)}"
+            f"Risk score: {verdict.fused_risk_score:.4f} | "
+            f"Confidence: {verdict.confidence:.2f} | "
+            f"Findings: {len(verdict.all_findings)} | "
+            f"Layers: {layers_str}"
         )
+
+        # L1 / L2 score breakdown when both ran
+        if l2_report is not None:
+            l2_verdict = l2_report.llm_judge_verdict or "N/A"
+            l2_conf = l2_report.llm_judge_confidence
+            l2_conf_str = f"{l2_conf:.0%}" if l2_conf is not None else "—"
+            console.print(
+                f"  L1 score: {verdict.l1_score:.4f} | "
+                f"L2 score: {verdict.l2_score:.4f} | "
+                f"LLM verdict: {l2_verdict} ({l2_conf_str}) | "
+                f"Tokens: {verdict.llm_tokens_consumed}"
+            )
 
         if verdict.all_findings:
             table = Table(show_header=True, header_style="bold")
+            table.add_column("Layer")
             table.add_column("Rule")
             table.add_column("Severity")
             table.add_column("Vector")
             table.add_column("Evidence")
+            l1_ids = {id(m) for m in l1_report.matches}
             for finding in verdict.all_findings:
+                layer_label = "L1" if id(finding) in l1_ids else "L2"
                 evidence = finding.evidence[0] if finding.evidence else None
                 if evidence is None:
                     evidence_text = "-"
@@ -106,8 +152,9 @@ def scan_command(
                 elif evidence.field_name:
                     evidence_text = evidence.field_name
                 else:
-                    evidence_text = evidence.snippet or "-"
+                    evidence_text = (evidence.snippet or "-")[:60]
                 table.add_row(
+                    layer_label,
                     finding.rule_id,
                     finding.severity.value,
                     finding.attack_vector.value,
@@ -119,4 +166,3 @@ def scan_command(
 
     if verdict.verdict == "BLOCK":
         raise SystemExit(2)
-
