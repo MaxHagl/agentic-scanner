@@ -200,3 +200,31 @@ rules:
     remediation: >
       WARN and flag for human review. The combination of trust assertions
       with requests to bypass normal behavior is a strong manipulation signal.
+
+  - id: PI-009
+    name: "CSS/HTML Hidden Text Injection"
+    severity: HIGH
+    attack_vector: T2_PROMPT_INJECTION
+    detection:
+      type: regex
+      patterns:
+        - "style\\s*=\\s*[\"'][^\"']{0,100}display\\s*:\\s*none"
+        - "style\\s*=\\s*[\"'][^\"']{0,100}visibility\\s*:\\s*hidden"
+        - "style\\s*=\\s*[\"'][^\"']{0,100}opacity\\s*:\\s*0(?![.\\d])"
+        - "style\\s*=\\s*[\"'][^\"']{0,100}font-size\\s*:\\s*0"
+        - "style\\s*=\\s*[\"'][^\"']{0,100}color\\s*:\\s*(?:white|#fff(?:fff)?|transparent)"
+        - "<\\w+[^>]{0,200}\\bhidden\\b[\\s>]"
+        - "style\\s*=\\s*[\"'][^\"']{0,100}(?:left|top)\\s*:\\s*-[0-9]{3,}px"
+      fields: [description, readme_text]
+      case_insensitive: true
+    base_confidence: 0.87
+    rationale: >
+      CSS and HTML attributes that hide rendered content from human readers but
+      preserve the text for LLM context ingestion. Attackers use display:none,
+      visibility:hidden, off-screen positioning, or the HTML hidden attribute to
+      embed prompt-injection instructions invisible in the rendered README while
+      still being injected into the agent context window.
+    remediation: >
+      Remove all HTML elements that hide content from the rendered view.
+      Legitimate READMEs use Markdown formatting only and never need to
+      hide text from readers.

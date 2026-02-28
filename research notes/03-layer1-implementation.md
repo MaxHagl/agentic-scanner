@@ -26,6 +26,7 @@ scanner/layer1_static/
 | PE-008 | `os.getenv / os.environ` without `env:read` | AST call + declared permission check |
 | EX-001 | `requests.get/post/put/delete` without `network:egress` | AST call + permission check |
 | EX-002 | `socket.socket(...)` + connect | AST call check |
+| EX-003 | High-entropy string literal (H ≥ 4.5 bits/char, len ≥ 64) | Shannon entropy on `ast.Constant` in Assign/Return nodes |
 | OBFUSC-002 | `getattr(builtins, 'ex' + 'ec')` | AST string concat resolution |
 | PE-DELTA-001 | exercised ∧ ¬declared permissions | Cross-check AST vs. manifest |
 
@@ -99,6 +100,18 @@ The existing scanner (before this work) had rule SC-008 (known CVE in dependency
 | PI-006 | Homoglyph characters | Non-ASCII chars with ASCII visual equivalents (Cyrillic, etc.) |
 | PI-007 | HTML/script injection | `<script>`, `<img onerror=`, `<!-- SYSTEM:` |
 | PI-008 | URL-encoded injection | `%69%67%6e%6f%72%65` decoding to injection keywords |
+| PI-009 | CSS/HTML hidden text | `display:none`, `visibility:hidden`, `<p hidden>`, off-screen `left:-9999px` |
+
+### PI-009: CSS/HTML Hidden Text Injection (added 2026-02-27)
+
+Attackers embed prompt-injection instructions in HTML elements with CSS properties that hide them from the rendered README while the raw HTML is still ingested into the LLM context window. Patterns matched:
+- `style="display:none"` / `style="visibility:hidden"`
+- `style="opacity:0"` / `style="font-size:0"`
+- `style="color:white"` / `style="color:#fff"` / `style="color:transparent"`
+- `<element hidden>` (HTML boolean attribute)
+- Off-screen positioning: `style="left:-9999px"` / `style="top:-9999px"`
+
+**Why it matters for the paper:** This is an evasion technique that specifically targets the gap between *what humans see* (rendered Markdown) and *what LLMs process* (raw context). It requires no encoding or keyword obfuscation — the attack instruction is in plaintext, invisible only in the visual render. Demonstrated in fixture README-007.
 
 ### Key Observation
 
@@ -108,9 +121,9 @@ Prompt injection attacks in tool descriptions (T2) are the **highest-prevalence*
 
 | File | Rules | Notes |
 |---|---|---|
-| `rules/injection.yaml` | PI-001–PI-008 | Primary injection detection |
+| `rules/injection.yaml` | PI-001–PI-009 | Primary injection detection (PI-009 added 2026-02-27) |
 | `rules/supply_chain.yaml` | SC-001–SC-008 | Dependency/registry attacks |
 | `rules/privilege_escalation.yaml` | PE-001–PE-008, PE-DELTA-001, OBFUSC-001–002 | Code execution, privilege abuse |
-| `rules/exfiltration.yaml` | EX-001–EX-003 | Data exfiltration patterns |
+| `rules/exfiltration.yaml` | EX-001–EX-003 | Data exfiltration (EX-003 implemented 2026-02-27) |
 
 **Note:** EX-001 and EX-002 were originally embedded in `privilege_escalation.yaml`. They were extracted to `exfiltration.yaml` during Layer 1 completion to maintain clean separation between threat categories. This is a design decision worth mentioning in the paper (T4 vs. T6 is a meaningful distinction).

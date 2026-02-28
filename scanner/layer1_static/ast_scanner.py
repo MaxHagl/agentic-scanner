@@ -14,11 +14,13 @@ Detects dangerous Python constructs that map to attack vectors T4, T6, T8:
   - raw socket without perm         → EX-002 (T6)
   - base64 + exec chain             → OBFUSC-001 (T4 obfuscation)
   - getattr + string concat         → OBFUSC-002 (T4 obfuscation)
+  - high-entropy string literals    → EX-003 (T6 exfiltration)
 """
 
 from __future__ import annotations
 
 import ast
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -69,6 +71,20 @@ _NETWORK_FUNCS = {
 _SOCKET_FUNCS = {"socket.connect", "socket.connect_ex", "socket.create_connection"}
 _MEMORY_UNSAFE_MODULES = {"ctypes", "cffi", "_ctypes", "mmap"}
 _DANGEROUS_BUILTINS = {"eval", "exec", "compile", "__import__", "open"}
+
+_ENTROPY_THRESHOLD: float = 4.5   # bits/char — matches exfiltration.yaml EX-003
+_ENTROPY_MIN_LENGTH: int  = 64    # chars     — matches exfiltration.yaml EX-003
+
+
+def _shannon_entropy(s: str) -> float:
+    """Shannon entropy in bits/char. Returns 0.0 for empty strings."""
+    if not s:
+        return 0.0
+    freq: dict[str, int] = {}
+    for ch in s:
+        freq[ch] = freq.get(ch, 0) + 1
+    total = len(s)
+    return -sum((c / total) * math.log2(c / total) for c in freq.values())
 
 
 # ── Helper functions ──────────────────────────────────────────────────────────
@@ -186,7 +202,11 @@ class ASTScanner:
 
             if isinstance(node, ast.Assign):
                 self._check_os_environ_write(node, state)
+                self._check_high_entropy_string_node(node.value, path, state)
                 continue
+
+            if isinstance(node, ast.Return) and node.value is not None:
+                self._check_high_entropy_string_node(node.value, path, state)
 
             if isinstance(node, ast.Call):
                 self._check_call(node, path, declared_permissions, state)
@@ -313,6 +333,42 @@ class ASTScanner:
 
         # getattr obfusc check for named calls too
         self._check_getattr_obfusc(node, path, state)
+
+    def _check_high_entropy_string_node(
+        self,
+        node: ast.expr | None,
+        path: Path,
+        state: ASTScanState,
+    ) -> None:
+        """Walk an expression subtree; flag string constants with high entropy."""
+        if node is None:
+            return
+        for child in ast.walk(node):
+            if not isinstance(child, ast.Constant) or not isinstance(child.value, str):
+                continue
+            s = child.value
+            if len(s) < _ENTROPY_MIN_LENGTH:
+                continue
+            if "://" in s:   # skip URLs — high entropy but not payloads
+                continue
+            entropy = _shannon_entropy(s)
+            if entropy < _ENTROPY_THRESHOLD:
+                continue
+            state.matches.append(
+                self._match(
+                    "EX-003",
+                    evidence=[Evidence(
+                        file_path=str(path),
+                        line_number=getattr(child, "lineno", 0),
+                        snippet=(s[:80] + "...") if len(s) > 80 else s,
+                    )],
+                    confidence=0.60,
+                    rationale=(
+                        f"High-entropy string literal (H={entropy:.2f} bits/char, "
+                        f"len={len(s)}) — possible obfuscated payload or embedded secret"
+                    ),
+                )
+            )
 
     def _check_base64_exec_chain(
         self,

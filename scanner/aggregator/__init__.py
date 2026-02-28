@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from scanner.models import FinalVerdict, RiskReport_L1, Severity, SkillManifest
-from scanner.models.risk_report import RiskReport_L2
+from scanner.models.risk_report import RiskReport_L2, RiskReport_L3
 
 _BLOCK_THRESHOLD = 0.75
 _WARN_THRESHOLD  = 0.35
@@ -83,4 +83,52 @@ def fuse_layers(
     )
 
 
-__all__ = ["fuse_layer1", "fuse_layers"]
+def fuse_layers_l3(
+    manifest: SkillManifest,
+    report_l1: RiskReport_L1,
+    report_l2: RiskReport_L2 | None,
+    report_l3: RiskReport_L3,
+) -> FinalVerdict:
+    """
+    Fuse L1 + optional L2 + L3 results into a FinalVerdict.
+
+    Score fusion: average of available layer composite scores.
+    Verdict thresholds are identical to L1-only: BLOCK ≥ 0.75, WARN ≥ 0.35.
+    CRITICAL findings from any layer always trigger BLOCK regardless of score.
+    """
+    scores = [report_l1.composite_score, report_l3.composite_score]
+    if report_l2 is not None:
+        scores.append(report_l2.composite_score)
+    fused_score = round(sum(scores) / len(scores), 4)
+
+    all_findings = report_l1.matches + report_l3.matches
+    if report_l2 is not None:
+        all_findings = all_findings + report_l2.injection_matches
+    critical_findings = [m for m in all_findings if m.severity == Severity.CRITICAL]
+    verdict = _verdict_from_score(fused_score, critical_findings)
+
+    confidence = min(1.0, max(0.55, 0.55 + fused_score * 0.4))
+    hard_block_reasons = [f"{m.rule_id}: {m.rule_name}" for m in critical_findings]
+    remediation_steps = list(dict.fromkeys(m.remediation for m in all_findings if m.remediation))
+
+    layers_executed = ["L1", "L3"] if report_l2 is None else ["L1", "L2", "L3"]
+    tokens = report_l2.llm_tokens_used if report_l2 is not None else 0
+
+    return FinalVerdict(
+        skill_name=_skill_name(manifest, report_l1.skill_name),
+        framework=manifest.framework.value,
+        verdict=verdict,
+        fused_risk_score=fused_score,
+        confidence=confidence,
+        l1_score=report_l1.composite_score,
+        l2_score=report_l2.composite_score if report_l2 is not None else None,
+        l3_score=report_l3.composite_score,
+        all_findings=all_findings,
+        hard_block_reasons=hard_block_reasons,
+        remediation_steps=remediation_steps[:10],
+        layers_executed=layers_executed,
+        llm_tokens_consumed=tokens,
+    )
+
+
+__all__ = ["fuse_layer1", "fuse_layers", "fuse_layers_l3"]

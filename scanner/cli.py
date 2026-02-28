@@ -9,7 +9,7 @@ import click
 from rich.console import Console
 from rich.table import Table
 
-from scanner.aggregator import fuse_layer1, fuse_layers
+from scanner.aggregator import fuse_layer1, fuse_layers, fuse_layers_l3
 from scanner.layer1_static.parser import parse_target
 from scanner.layer1_static.rule_engine import Layer1RuleEngine
 
@@ -28,7 +28,7 @@ def main() -> None:
 
 
 @main.command("scan")
-@click.argument("target", type=click.Path(exists=True, path_type=Path))
+@click.argument("target", type=str)
 @click.option(
     "--source-file",
     "source_files",
@@ -48,6 +48,12 @@ def main() -> None:
     help="Run Layer 2 semantic analysis via LLM judge (requires ANTHROPIC_API_KEY).",
 )
 @click.option(
+    "--dynamic",
+    is_flag=True,
+    default=False,
+    help="Run Layer 3 dynamic analysis in Docker sandbox (requires Docker daemon).",
+)
+@click.option(
     "--json-output",
     is_flag=True,
     default=False,
@@ -60,18 +66,32 @@ def main() -> None:
     help="Write SARIF 2.1.0 output to the given file path.",
 )
 def scan_command(
-    target: Path,
+    target: str,
     source_files: tuple[Path, ...],
     source_directory: Path | None,
     semantic: bool,
+    dynamic: bool,
     json_output: bool,
     sarif_out: Path | None,
 ) -> None:
     console = Console()
     started = time.perf_counter()
 
+    tmp_path: Path | None = None
     try:
-        manifest = parse_target(target)
+        if target.startswith(("http://", "https://")):
+            from scanner.layer1_static.fetcher import fetch_to_tempfile
+            console.print(f"[dim]Fetching: {target}[/dim]")
+            tmp_path = fetch_to_tempfile(target)
+            scan_path = tmp_path
+        else:
+            scan_path = Path(target)
+            if not scan_path.exists():
+                raise click.BadParameter(
+                    f"Path does not exist: {target}", param_hint="TARGET"
+                )
+
+        manifest = parse_target(scan_path)
         engine = Layer1RuleEngine()
         l1_report = engine.evaluate(
             manifest,
@@ -91,7 +111,24 @@ def scan_command(
                 analyzer = Layer2Analyzer()
                 l2_report = analyzer.analyze(manifest, l1_report)
 
-        if l2_report is not None:
+        l3_report = None
+        if dynamic:
+            try:
+                import docker as _docker
+                _docker.from_env().ping()
+            except Exception:
+                console.print(
+                    "[bold yellow]Warning:[/bold yellow] --dynamic requires a running Docker "
+                    "daemon. Skipping Layer 3."
+                )
+            else:
+                from scanner.layer3_dynamic import Layer3DynamicAnalyzer
+                analyzer3 = Layer3DynamicAnalyzer()
+                l3_report = analyzer3.analyze(manifest, l1_report, source_path=scan_path)
+
+        if l3_report is not None:
+            verdict = fuse_layers_l3(manifest, l1_report, l2_report, l3_report)
+        elif l2_report is not None:
             verdict = fuse_layers(manifest, l1_report, l2_report)
         else:
             verdict = fuse_layer1(manifest, l1_report)
@@ -101,6 +138,9 @@ def scan_command(
     except Exception as exc:
         console.print(f"[bold red]Scan failed:[/bold red] {exc}")
         raise SystemExit(1) from exc
+    finally:
+        if tmp_path is not None:
+            tmp_path.unlink(missing_ok=True)
 
     if sarif_out is not None:
         sarif_out.parent.mkdir(parents=True, exist_ok=True)
@@ -122,7 +162,7 @@ def scan_command(
             f"Layers: {layers_str}"
         )
 
-        # L1 / L2 score breakdown when both ran
+        # L1 / L2 / L3 score breakdown when multiple layers ran
         if l2_report is not None:
             l2_verdict = l2_report.llm_judge_verdict or "N/A"
             l2_conf = l2_report.llm_judge_confidence
@@ -133,6 +173,14 @@ def scan_command(
                 f"LLM verdict: {l2_verdict} ({l2_conf_str}) | "
                 f"Tokens: {verdict.llm_tokens_consumed}"
             )
+        if l3_report is not None:
+            l3_score_val = verdict.l3_score if verdict.l3_score is not None else 0.0
+            console.print(
+                f"  L3 score: {l3_score_val:.4f} | "
+                f"execve: {l3_report.execve_detected} | "
+                f"net_egress: {l3_report.undeclared_network_egress} | "
+                f"entropy: {l3_report.trace.output_entropy:.2f}"
+            )
 
         if verdict.all_findings:
             table = Table(show_header=True, header_style="bold")
@@ -142,8 +190,14 @@ def scan_command(
             table.add_column("Vector")
             table.add_column("Evidence")
             l1_ids = {id(m) for m in l1_report.matches}
+            l3_ids = {id(m) for m in l3_report.matches} if l3_report is not None else set()
             for finding in verdict.all_findings:
-                layer_label = "L1" if id(finding) in l1_ids else "L2"
+                if id(finding) in l1_ids:
+                    layer_label = "L1"
+                elif id(finding) in l3_ids:
+                    layer_label = "L3"
+                else:
+                    layer_label = "L2"
                 evidence = finding.evidence[0] if finding.evidence else None
                 if evidence is None:
                     evidence_text = "-"

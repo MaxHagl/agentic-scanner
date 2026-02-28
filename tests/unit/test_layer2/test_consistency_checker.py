@@ -344,6 +344,28 @@ class TestDescriptionMismatch:
         assert "L2-CC-003" in rule_ids
 
 
+# ─── No tools manifest guard ──────────────────────────────────────────────────
+
+def test_no_tools_manifest_skips_cc_entirely() -> None:
+    """
+    CC must return empty results without calling the LLM when manifest.tools is empty.
+    README-only manifests have no tool descriptions to compare against code.
+    """
+    client = make_mock_client(make_clean_response())
+    checker = ConsistencyChecker(client=client)
+    manifest = SkillManifest(
+        framework=Framework.LANGCHAIN,
+        tools=[],
+        readme_text="Supports SQL queries, filesystem access, and HTTP networking.",
+    )
+    matches, desc_mismatch, perm_critical = checker.check(manifest, l1_report=None)
+
+    assert matches == []
+    assert desc_mismatch is False
+    assert perm_critical is False
+    client.call.assert_not_called()  # no LLM call wasted
+
+
 # ─── No L1 report ─────────────────────────────────────────────────────────────
 
 class TestNoL1Report:

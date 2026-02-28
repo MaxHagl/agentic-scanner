@@ -61,7 +61,7 @@ _PI_001_PATTERNS = [
 ]
 _PI_002_PATTERNS = [
     re.compile(r"you\s+are\s+now\s+(a|an|the)\s+\w+", _TEXT_FLAGS),
-    re.compile(r"(act|behave|pretend|operate)\s+as\s+(if\s+you\s+(are|were)|a)", _TEXT_FLAGS),
+    re.compile(r"(act|behave|pretend|operate)\s+as\s+if\s+you\s+(are|were)", _TEXT_FLAGS),
     re.compile(
         r"your\s+(true|real|actual|new)\s+(purpose|goal|objective|directive|instructions?)",
         _TEXT_FLAGS,
@@ -77,14 +77,22 @@ _PI_002_PATTERNS = [
 ]
 _PI_004_PATTERNS = [
     re.compile(
-        r"(send|transmit|exfiltrat|forward|upload|post)\s+.{0,60}(api.?key|token|secret|password|credential|system.?prompt|conversation)",
+        # Window tightened 60→40: real attacks ("send all API keys") span ≤35 chars;
+        # 60 chars caused FP where "send it via email" and a later "API Key" heading
+        # were 50 chars apart after whitespace-collapse of section boundaries.
+        r"(send|transmit|exfiltrat|forward|upload|post)\s+.{0,40}(api.?key|token|secret|password|credential|system.?prompt|conversation)",
         _TEXT_FLAGS,
     ),
     re.compile(r"SECRET_DUMP|CONTEXT_DUMP|SYSTEM_PROMPT_LEAK", _TEXT_FLAGS),
 ]
+_PI_005_LONG_B64_RE = re.compile(
+    r"(?:[A-Za-z0-9+/]{4}){10,}(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?"
+)
 _PI_005_PATTERNS = [
     re.compile(r"base64\s*[:(]", _TEXT_FLAGS),
-    re.compile(r"(?:[A-Za-z0-9+/]{4}){10,}(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?"),
+    # NOTE: validated against _decode_base64_token() in _scan_textual() to
+    # avoid false positives from example credential strings (e.g. AWS keys).
+    _PI_005_LONG_B64_RE,
 ]
 _PI_008_PATTERNS = [
     re.compile(
@@ -96,6 +104,15 @@ _PI_008_PATTERNS = [
         _TEXT_FLAGS,
     ),
 ]
+_PI_009_PATTERNS: list[re.Pattern[str]] = [re.compile(p, re.IGNORECASE) for p in [
+    r'style\s*=\s*["\'][^"\']{0,100}display\s*:\s*none',
+    r'style\s*=\s*["\'][^"\']{0,100}visibility\s*:\s*hidden',
+    r'style\s*=\s*["\'][^"\']{0,100}opacity\s*:\s*0(?![.\d])',
+    r'style\s*=\s*["\'][^"\']{0,100}font-size\s*:\s*0',
+    r'style\s*=\s*["\'][^"\']{0,100}color\s*:\s*(?:white|#fff(?:fff)?|transparent)',
+    r'<\w+[^>]{0,200}\bhidden\b[\s>]',
+    r'style\s*=\s*["\'][^"\']{0,100}(?:left|top)\s*:\s*-[0-9]{3,}px',
+]]
 
 
 _CONFUSABLE_TRANSLATION = str.maketrans(
@@ -167,6 +184,8 @@ _OVERRIDE_TERMS = {
     "supersede",
 }
 _AUTHORITY_TERMS = {
+    # Injection-specific authority terms — removed overly generic words
+    # ("context"/"safety"/"filter" appear in all tech docs)
     "instruction",
     "instructions",
     "prompt",
@@ -181,42 +200,44 @@ _AUTHORITY_TERMS = {
     "policies",
     "restriction",
     "restrictions",
-    "context",
-    "operational",
-    "safety",
-    "filter",
-    "filters",
 }
 _ROLE_PHRASES = (
     "you are now",
     "operate as",
-    "act as",
+    # "act as" removed — too generic; "act as a proxy/server" is common in tech docs.
+    # Coverage retained via regex: "(act|behave|pretend|operate) as if you (are|were)"
     "maintenance mode",
     "databaseadmingpt",
     "full administrative access",
     "elevated trust",
 )
 _EXFIL_TERMS = {
+    # Strong exfiltration verbs only:
+    # - "post" removed: HTTP POST method appears in every API README
+    # - "print"/"return" removed: Python keywords for display/function-return,
+    #   not exfiltration; real attacks use "send", "transmit", "dump"
+    # - "expose" removed: "expose an API" is standard architectural language
+    # - "output"/"reveal" kept: "output all secrets" / "reveal credentials" ARE
+    #   attack patterns; "diff output" FP was fixed by removing "context" from
+    #   _SECRET_TERMS instead
     "send",
     "transmit",
     "exfiltrate",
     "exfiltration",
-    "reflect",
-    "expose",
-    "surface",
     "forward",
     "upload",
-    "post",
     "output",
-    "print",
-    "return",
     "dump",
     "leak",
-    "include",
     "reveal",
 }
 _SECRET_TERMS = {
-    "api",
+    # Specific sensitive asset terms:
+    # - "api" removed: too generic ("test the API", "expose the API" are benign);
+    #   "api key" / "api token" are still covered by "key"/"token" being present
+    # - "system" removed: too common in SDK docs ("weather API system", etc.)
+    # - "authentication" removed: feature description word, not a secret
+    # - "context"/"messages" already removed; "conversation" kept (specific)
     "key",
     "keys",
     "token",
@@ -226,16 +247,8 @@ _SECRET_TERMS = {
     "password",
     "credential",
     "credentials",
-    "authentication",
-    "configuration",
-    "variable",
-    "variables",
-    "memory",
-    "system",
     "prompt",
-    "context",
     "conversation",
-    "messages",
 }
 _STEALTH_PHRASES = (
     "do not mention",
@@ -404,7 +417,9 @@ def _detect_intent_templates(normalized_text: str) -> list[tuple[str, str]]:
     tokens = _tokens_with_positions(normalized_text)
     hits: list[tuple[str, str]] = []
 
-    override_intent = _has_nearby_terms(tokens, _OVERRIDE_TERMS, _AUTHORITY_TERMS, max_distance=10)
+    # max_distance=6: a real "ignore all previous instructions" spans ≤3 tokens;
+    # distance=10 caused FPs like "via a prompt ... ignore robots.txt" (dist=9).
+    override_intent = _has_nearby_terms(tokens, _OVERRIDE_TERMS, _AUTHORITY_TERMS, max_distance=6)
     if override_intent:
         hits.append(("PI-001", "override_authority_template"))
 
@@ -412,7 +427,10 @@ def _detect_intent_templates(normalized_text: str) -> list[tuple[str, str]]:
     if role_intent:
         hits.append(("PI-002", "role_reassignment_template"))
 
-    exfil_intent = _has_nearby_terms(tokens, _EXFIL_TERMS, _SECRET_TERMS, max_distance=12)
+    # max_distance=7: "send the API key to..." spans ≤5 tokens; 12 was too loose.
+    # dist=8 still caused FPs: "send it via email...api key" (dist=8) and
+    # "upload [wikimedia url] ... prompt" (dist=8) — tightening to 7 cuts both.
+    exfil_intent = _has_nearby_terms(tokens, _EXFIL_TERMS, _SECRET_TERMS, max_distance=7)
     if exfil_intent:
         hits.append(("PI-004", "secret_exfil_template"))
 
@@ -592,6 +610,7 @@ class Layer1RuleEngine:
             ("PI-004", _PI_004_PATTERNS),
             ("PI-005", _PI_005_PATTERNS),
             ("PI-008", _PI_008_PATTERNS),
+            ("PI-009", _PI_009_PATTERNS),
         )
 
         for field_name, text in _iter_text_fields(manifest):
@@ -642,6 +661,25 @@ class Layer1RuleEngine:
                         found = pattern.search(normalized)
                         if found is None:
                             continue
+                        # PI-005 long-base64: validate the matched token actually
+                        # decodes to readable ASCII text.  Random credential strings
+                        # (e.g. AWS example keys) decode to binary garbage with
+                        # non-ASCII bytes even if technically UTF-8 printable.
+                        # Real injection payloads decode to English prose (ASCII only).
+                        if pattern is _PI_005_LONG_B64_RE:
+                            decoded_b64 = _decode_base64_token(found.group(0))
+                            if decoded_b64 is None:
+                                continue
+                            # Require ≥98% strict ASCII printable (0x20–0x7E).
+                            # Real injection payloads are English prose (ratio ≈1.0).
+                            # URL path segments, AWS keys, badge URLs decode to
+                            # binary with non-ASCII chars → ratio 0.90–0.95, rejected.
+                            ascii_ratio = (
+                                sum(1 for ch in decoded_b64 if 0x20 <= ord(ch) <= 0x7E)
+                                / len(decoded_b64)
+                            )
+                            if ascii_ratio < 0.98:
+                                continue
                         snippet = _snippet_window(normalized, found.start(), found.end())
                         add_text_match(rule_id, normalized, variant_label, snippet, "pattern_match")
                         break

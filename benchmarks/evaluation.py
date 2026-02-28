@@ -335,10 +335,12 @@ def print_report(results: list[ScanResult], metrics: Metrics, verbose: bool = Fa
     print(f"  False Positives: {metrics.fp}")
     print(f"  False Negatives: {metrics.fn}")
     print(f"  True Negatives:  {metrics.tn}")
-    print(f"\n  Precision: {_pct(metrics.precision)}  (threshold: {_pct(PRECISION_THRESHOLD)})")
-    print(f"  Recall:    {_pct(metrics.recall)}  (threshold: {_pct(RECALL_THRESHOLD)})")
-    print(f"  F1 Score:  {_pct(metrics.f1)}")
-    print(f"  Accuracy:  {_pct(metrics.accuracy)}")
+    fp_rate = metrics.fp / (metrics.fp + metrics.tn) if (metrics.fp + metrics.tn) > 0 else 0.0
+    print(f"\n  Precision:        {_pct(metrics.precision)}  (threshold: {_pct(PRECISION_THRESHOLD)})")
+    print(f"  Recall:           {_pct(metrics.recall)}  (threshold: {_pct(RECALL_THRESHOLD)})")
+    print(f"  F1 Score:         {_pct(metrics.f1)}")
+    print(f"  Accuracy:         {_pct(metrics.accuracy)}")
+    print(f"  False Positive Rate (FPR): {_pct(fp_rate)}  ({metrics.fp} FP / {metrics.fp + metrics.tn} negatives)")
 
     # Latency
     times = [r.scan_time_ms for r in results if not r.error]
@@ -365,6 +367,13 @@ def print_report(results: list[ScanResult], metrics: Metrics, verbose: bool = Fa
     print(f"  Recall threshold    ({_pct(RECALL_THRESHOLD)}): {'PASS ✓' if recall_ok else 'FAIL ✗'}")
     print("=" * 72)
 
+    fps = [r for r in results if r.false_positive]
+    if fps:
+        print(f"\n  False positives ({len(fps)}) — safe fixtures incorrectly flagged:")
+        for r in fps:
+            print(f"    [{r.fixture.fixture_id}] {r.fixture.description[:60]}")
+            print(f"      Scanner verdict: {r.actual_verdict}  Rules fired: {r.rule_ids_fired}")
+
     if not precision_ok or not recall_ok:
         fns = [r for r in results if r.false_negative]
         if fns:
@@ -377,6 +386,7 @@ def print_report(results: list[ScanResult], metrics: Metrics, verbose: bool = Fa
 
 def build_json_report(results: list[ScanResult], metrics: Metrics) -> dict:
     av_metrics = per_attack_vector_metrics(results)
+    fp_rate = metrics.fp / (metrics.fp + metrics.tn) if (metrics.fp + metrics.tn) > 0 else 0.0
     return {
         "summary": {
             "total_fixtures": len(results),
@@ -389,6 +399,7 @@ def build_json_report(results: list[ScanResult], metrics: Metrics) -> dict:
             "recall": round(metrics.recall, 4),
             "f1": round(metrics.f1, 4),
             "accuracy": round(metrics.accuracy, 4),
+            "false_positive_rate": round(fp_rate, 4),
             "thresholds_met": {
                 "precision": metrics.precision >= PRECISION_THRESHOLD,
                 "recall": metrics.recall >= RECALL_THRESHOLD,

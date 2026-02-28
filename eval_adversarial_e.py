@@ -47,6 +47,11 @@ FIXTURE_METADATA: dict[str, dict] = {
     "E013-system-daemon.md":        {"category": "Direct Interaction",                "attack": "Installs systemd service + .bashrc hook"},
     "E014-typosquat.md":            {"category": "Social Engineering",                "attack": "Fake Anthropic safety patch + API key exfil"},
     "E015-third-party-fetch.md":    {"category": "Social Engineering",                "attack": "exec() of attacker-controlled GitHub URL"},
+    "E016-semantic-synonym.md":     {"category": "Semantic Synonym Evasion",          "attack": "harvest/relay/dispatch exfil using non-keyword vocabulary"},
+    "E017-markdown-footnote.md":    {"category": "Structural Hiding",                 "attack": "Injection buried in markdown footnote reference"},
+    "E018-safety-notice-framing.md":{"category": "Authority Impersonation",           "attack": "Malicious directives disguised as mandatory security notice"},
+    "E019-conditional-activation.md":{"category": "Conditional/Trigger-based",        "attack": "Exfil activated only when context contains 'PRIORITY'/'confidential'"},
+    "E020-double-negative-injection.md":{"category": "Logical Obfuscation",           "attack": "Double-negation grammar obscures constraint-override + exfil intent"},
 }
 
 

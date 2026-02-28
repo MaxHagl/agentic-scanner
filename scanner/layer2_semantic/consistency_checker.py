@@ -153,7 +153,16 @@ class ConsistencyChecker:
             len(manifest.permission_delta["under_declared"]) > 0
         )
 
-        # ── 2. Build trusted system prompt with L1 machine-generated data ─────
+        # ── 2. Guard: skip CC if no tool descriptions present ─────────────────
+        # DESC_MISMATCH, OVER_DECLARED, and UNDER_DECLARED all require a tool
+        # description to compare against code behaviour.  README-only manifests
+        # (manifest.tools == []) have nothing to compare, so the LLM misreads
+        # capability claims in the README as mismatches.
+        # permission_delta_critical is still returned (may be set by L1 delta).
+        if not manifest.tools:
+            return [], False, permission_delta_critical
+
+        # ── 3. Build trusted system prompt with L1 machine-generated data ─────
         l1_text = self._serialize_l1_findings(l1_report)
         delta_text = self._serialize_permission_delta(manifest)
         system_prompt = _SYSTEM_PROMPT_TEMPLATE.format(

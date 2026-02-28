@@ -136,6 +136,9 @@ class RiskReport_L3(BaseModel):
     filesystem_write_outside_scope: bool = False
     ptrace_attempted: bool = False
     rwx_mmap_detected: bool = False
+    # Agent simulation metadata (populated by _run_agent_simulation path only)
+    agent_simulation_executed: bool = False
+    agent_tool_call_count: int = 0
 
     @computed_field
     @property
