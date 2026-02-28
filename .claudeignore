@@ -1,0 +1,22 @@
+# .claudeignore
+# Excludes high-volume, low-relevance directories from Claude's context window
+# to reduce token usage. These files are still tracked by git.
+# See notes_for_claude.md for the rationale.
+
+# Test fixtures — thousands of lines of strings, rarely needed for code edits.
+# Only read these if explicitly asked to debug a specific test or fixture.
+tests/fixtures/
+
+# Meeting notes and research notes — historical context, not code.
+# Read only if user specifically asks about research or meeting decisions.
+meeting notes/
+research notes/
+
+# Build artifacts and caches
+__pycache__/
+*.pyc
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+dist/
+*.egg-info/
