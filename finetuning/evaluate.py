@@ -100,11 +100,15 @@ def _load_model_and_tokenizer(adapter_path: Path) -> tuple[Any, Any, Any]:
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
+    # float16 for inference (halves VRAM vs float32); low_cpu_mem_usage streams
+    # shards directly to MPS instead of double-buffering in CPU RAM first.
+    # Note: train.py still uses float32 — MPS requires it for LoRA backward.
     base = AutoModelForCausalLM.from_pretrained(
         base_model,
-        torch_dtype=torch.float32,
+        torch_dtype=torch.float16,
         trust_remote_code=True,
         attn_implementation="eager",
+        low_cpu_mem_usage=True,
     ).to(device)
 
     model = PeftModel.from_pretrained(base, str(adapter_path))
@@ -135,11 +139,11 @@ def _run_inference(
     with torch.no_grad():
         outputs = model.generate(
             **inputs,
-            max_new_tokens=max_new_tokens,
+            max_new_tokens=128,       # JSON outputs are short; 256 wastes activation memory
             do_sample=False,
-            temperature=1.0,  # deterministic (do_sample=False overrides)
+            temperature=1.0,
             pad_token_id=tokenizer.eos_token_id,
-            use_cache=False,  # avoids DynamicCache.seen_tokens AttributeError on transformers>=4.44
+            use_cache=False,
         )
 
     # Decode only the newly generated tokens

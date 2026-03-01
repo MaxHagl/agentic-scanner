@@ -62,7 +62,7 @@ class LocalLLMJudge:
         self,
         adapter_path: str | Path,
         confidence_threshold: float = 0.80,
-        max_new_tokens: int = 256,
+        max_new_tokens: int = 128,   # JSON outputs are short; 256 wastes activation memory
     ) -> None:
         self._adapter_path = Path(adapter_path)
         self._threshold = confidence_threshold
@@ -179,11 +179,14 @@ class LocalLLMJudge:
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
 
+        # float16 for inference (halves memory vs float32); low_cpu_mem_usage
+        # streams shards directly to device instead of double-buffering in CPU RAM.
         base = AutoModelForCausalLM.from_pretrained(
             base_model,
-            torch_dtype=torch.float32,
+            torch_dtype=torch.float16,
             trust_remote_code=True,
             attn_implementation="eager",
+            low_cpu_mem_usage=True,
         ).to(device)
 
         model = PeftModel.from_pretrained(base, str(self._adapter_path))
