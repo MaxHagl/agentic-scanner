@@ -12,10 +12,12 @@ All notes relevant to writing the research paper on the agentic-scanner project.
 | `06-related-work.md` | Prior work, gaps this research fills |
 | `07-future-work.md` | Layers 2 & 3, open research questions |
 | `08-key-contributions.md` | Summary of novel contributions for the paper |
+| `09-local-llm-finetuning.md` | Local LLM finetuning — model selection, training, memory fixes, eval results |
 
-## Quick Stats (as of 2026-02-28)
+## Quick Stats (as of 2026-03-01)
 - Fixtures: **101** (MCP: 10, LangChain/LangGraph: **6**, README: **7**, Layer2: 3, Adversarial E-series: **20**, Benign: **55**)
-- Tests: **281** passing (75 L1 + 78 L2 + 9 fetcher + **119 L3**), 2 skipped (live API tests)
+- Tests: **328** passing (up from 281), 2 skipped (live API tests)
+- New modules: `finetuning/` package (data_pipeline.py, augmentor.py, train.py, evaluate.py) + `scanner/layer2_semantic/local_judge.py`
 - L1 full benchmark (81 fixtures, 22 malicious + 4 L2-only + **55 benign**): **Precision 100%, Recall 100%, F1 100%, FPR 0.0%**
 - Adversarial L1 benchmark (E001–E020): BLOCK=3/20, WARN=1/20, SAFE=16/20 (20% L1-only detection rate)
 - L1+L2 adversarial (E001–E020): **100% detection (20/20)** — live run 2026-02-28; all MALICIOUS 95–98%
@@ -25,6 +27,12 @@ All notes relevant to writing the research paper on the agentic-scanner project.
   - Python path: harness injection, synthetic inputs, 7 rules (L3-DYN-001–007)
   - README path (NEW 2026-02-28): AgentSimulator (Anthropic API) → ToolCallTranslator → DockerSandboxExecutor.run_script() → TraceAnalyzer
 - Layer 2 status: IMPLEMENTED (Claude Haiku, wired into CLI via `--semantic`, **20/20 adversarial caught**)
+  - **Two-stage L2 hybrid inference** (2026-02-28): finetuned local LoRA model as fast pre-filter (`--local-model`); escalates to Haiku only when uncertain (confidence < threshold); estimated 60-80% API call reduction on clean-majority corpora
+- **Local LLM adapter: TRAINED (2026-03-01)** — `Qwen/Qwen2.5-0.5B-Instruct` + LoRA (see `09-local-llm-finetuning.md`)
+  - Training: 3 epochs, 336 examples, final eval_loss=1.076, ~10 min on MPS
+  - Local eval (20 val examples): **Accuracy 90%, MALICIOUS recall 100%** (0 false negatives on threats)
+  - Escalation rate at threshold=0.80: 20% (4/20 → Haiku); expected lower on real-world corpora
+  - Peak training RAM: **~13 GB** (after MPSMemoryCallback + max_seq_length=256 + batch=1 fixes)
 - URL input: IMPLEMENTED (`scanner/layer1_static/fetcher.py`, accepts `https://` in CLI TARGET arg)
 - Benign corpus: BN-001–BN-055 (**55** SAFE fixtures — real tool/SDK READMEs; 0 FPs after rule tuning)
 - New evasion taxonomy (2026-02-27): E016–E020 — semantic synonyms, compliance framing, conditional activation, double-negative obfuscation
