@@ -78,14 +78,15 @@ def _load_model_and_tokenizer(adapter_path: Path) -> tuple[Any, Any, Any]:
         adapter_config = adapter_path / "adapter_config.json"
         if adapter_config.exists():
             cfg = json.loads(adapter_config.read_text(encoding="utf-8"))
-            base_model = cfg.get("base_model_name_or_path", "microsoft/Phi-3.5-mini-instruct")
+            base_model = cfg.get("base_model_name_or_path", "Qwen/Qwen2.5-1.5B-Instruct")
         else:
-            base_model = "microsoft/Phi-3.5-mini-instruct"
+            base_model = "Qwen/Qwen2.5-1.5B-Instruct"
         print(f"[WARN] No provenance file — inferring base model: {base_model}")
 
     print(f"[INFO] Base model: {base_model}")
     print(f"[INFO] Adapter:    {adapter_path}")
 
+    # Qwen2.5-1.5B-Instruct fits in ~6GB fp16 on MPS — well within 32GB unified RAM.
     if torch.backends.mps.is_available():
         device = torch.device("mps")
     elif torch.cuda.is_available():

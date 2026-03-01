@@ -179,13 +179,19 @@ class LocalLLMJudge:
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
 
-        # float16 for inference (halves memory vs float32); low_cpu_mem_usage
-        # streams shards directly to device instead of double-buffering in CPU RAM.
+        # Qwen2.5-1.5B fits ~6GB on MPS — well within 32GB unified RAM.
+        if torch.backends.mps.is_available():
+            device = torch.device("mps")
+        elif torch.cuda.is_available():
+            device = torch.device("cuda")
+        else:
+            device = torch.device("cpu")
+        print(f"[INFO] LocalLLMJudge: device={device}")
+
         base = AutoModelForCausalLM.from_pretrained(
             base_model,
             torch_dtype=torch.float16,
             trust_remote_code=True,
-            attn_implementation="eager",
             low_cpu_mem_usage=True,
         ).to(device)
 
@@ -217,9 +223,9 @@ class LocalLLMJudge:
                 pass
 
         logger.warning(
-            "LocalLLMJudge: could not determine base model — defaulting to Phi-3.5-mini-instruct"
+            "LocalLLMJudge: could not determine base model — defaulting to Qwen2.5-1.5B-Instruct"
         )
-        return "microsoft/Phi-3.5-mini-instruct"
+        return "Qwen/Qwen2.5-1.5B-Instruct"
 
     # ── Inference ─────────────────────────────────────────────────────────────
 

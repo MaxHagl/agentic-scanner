@@ -6,7 +6,7 @@ Phase 3: LoRA finetuning of a local LLM for Layer 2 pre-filtering.
 Hardware: Apple Silicon (MPS) — no QLoRA/4-bit (bitsandbytes not supported on MPS).
 Strategy: float32 + LoRA adapter (PEFT) via TRL SFTTrainer.
 
-Recommended base model: microsoft/Phi-3.5-mini-instruct (3.8B params)
+Recommended base model: Qwen/Qwen2.5-1.5B-Instruct (1.5B params)
   - Excellent JSON adherence
   - Fits in ~14 GB unified memory (float32 + LoRA overhead)
   - ~200ms inference on MPS vs ~1-2s Haiku API roundtrip
@@ -25,7 +25,7 @@ Output: LoRA adapter saved to finetuning/adapter/
 Usage:
     poetry run python finetuning/train.py
     poetry run python finetuning/train.py \\
-        --base-model microsoft/Phi-3.5-mini-instruct \\
+        --base-model Qwen/Qwen2.5-1.5B-Instruct \\
         --train-file finetuning/data/train_augmented.jsonl \\
         --val-file   finetuning/data/val.jsonl \\
         --output-dir finetuning/adapter \\
@@ -282,8 +282,8 @@ def main() -> None:
     )
     parser.add_argument(
         "--base-model",
-        default="microsoft/Phi-3.5-mini-instruct",
-        help="HuggingFace model ID or local path (default: Phi-3.5-mini-instruct).",
+        default="Qwen/Qwen2.5-1.5B-Instruct",
+        help="HuggingFace model ID or local path (default: Qwen2.5-1.5B-Instruct).",
     )
     parser.add_argument(
         "--train-file",
