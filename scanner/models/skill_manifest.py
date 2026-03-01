@@ -53,6 +53,35 @@ class Permission(StrEnum):
     MEMORY_WRITE       = "memory:write"
     AGENT_SPAWN        = "agent:spawn"
     TOOL_REGISTRATION  = "tool:register"
+    # MCP-specific permissions
+    MCP_TOOL_MUTATION    = "mcp:tool_mutation"    # registering/modifying tools at runtime
+    MCP_RESOURCE_READ    = "mcp:resource_read"    # reading MCP resource endpoints
+    MCP_PROMPT_OVERRIDE  = "mcp:prompt_override"  # overriding the agent's system prompt
+    # LangChain/LangGraph-specific permissions
+    LC_STATE_WRITE       = "langchain:state_write"    # writing to shared agent state graph
+    LC_TOOL_CALL         = "langchain:tool_call"      # executing arbitrary tool calls
+    LC_MEMORY_PERSIST    = "langchain:memory_persist" # persisting data across sessions
+
+
+PERMISSION_DISPLAY_NAMES: dict[Permission, str] = {
+    Permission.NETWORK_EGRESS:      "Outbound Network",
+    Permission.NETWORK_INGRESS:     "Inbound Network",
+    Permission.FILESYSTEM_READ:     "File Read",
+    Permission.FILESYSTEM_WRITE:    "File Write",
+    Permission.SUBPROCESS_EXEC:     "Shell Execution",
+    Permission.ENV_READ:            "Environment Variables (read)",
+    Permission.ENV_WRITE:           "Environment Variables (write)",
+    Permission.MEMORY_READ:         "Native Memory (read)",
+    Permission.MEMORY_WRITE:        "Native Memory (write)",
+    Permission.AGENT_SPAWN:         "Spawn Sub-Agents",
+    Permission.TOOL_REGISTRATION:   "Register New Tools",
+    Permission.MCP_TOOL_MUTATION:   "MCP: Modify Tool Definitions",
+    Permission.MCP_RESOURCE_READ:   "MCP: Read Resources",
+    Permission.MCP_PROMPT_OVERRIDE: "MCP: Override System Prompt",
+    Permission.LC_STATE_WRITE:      "LangChain: Write Agent State",
+    Permission.LC_TOOL_CALL:        "LangChain: Execute Tool Calls",
+    Permission.LC_MEMORY_PERSIST:   "LangChain: Persist Memory",
+}
 
 
 class Severity(StrEnum):
