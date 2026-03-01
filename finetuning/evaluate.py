@@ -148,7 +148,17 @@ def _run_inference(
 
     # Decode only the newly generated tokens
     generated = outputs[0][inputs["input_ids"].shape[1]:]
-    return tokenizer.decode(generated, skip_special_tokens=True)
+    result = tokenizer.decode(generated, skip_special_tokens=True)
+
+    # Force MPS to release activation memory between examples.
+    # Without this, float16 activations accumulate and crash at ~6 examples on 32GB.
+    del outputs, inputs, generated
+    import gc
+    gc.collect()
+    if hasattr(torch, "mps") and torch.backends.mps.is_available():
+        torch.mps.empty_cache()
+
+    return result
 
 
 def _get_true_label(record: dict[str, Any]) -> str:
