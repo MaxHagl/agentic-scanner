@@ -131,7 +131,7 @@ def train(
     train_file: Path,
     val_file: Path,
     output_dir: Path,
-    epochs: int = 3,
+    epochs: int = 5,  # increased from 3 — larger SUSPICIOUS class benefits from more passes
     learning_rate: float = 2e-4,
     per_device_batch: int = 1,   # batch=2 doubles per-step MPS allocation; keep at 1
     grad_accum: int = 8,         # compensate: effective batch = 8 (was 2×4=8)

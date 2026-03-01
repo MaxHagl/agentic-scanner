@@ -69,18 +69,39 @@ class Layer3DynamicAnalyzer:
     The agent_client (raw anthropic.Anthropic instance) is used only for the
     README-only path and is constructed lazily from ANTHROPIC_API_KEY if not
     injected.
+
+    When *pool_size* > 0, a ContainerPool is pre-warmed and used in place of
+    per-scan container creation.  Pool startup failures fall back silently to
+    the non-pooled executor (fail-open).
     """
 
     def __init__(
         self,
         executor: object | None = None,
         agent_client: object | None = None,
+        pool_size: int = 0,
     ) -> None:
         # executor: DockerSandboxExecutor instance, or None to use the real Docker executor.
         # agent_client: raw anthropic.Anthropic instance for AgentSimulator, or None.
         # Both are injectable for tests to avoid requiring Docker daemon or API key.
         self._executor = executor
         self._agent_client = agent_client
+        self._pool: object | None = None
+
+        if pool_size > 0 and executor is None:
+            try:
+                from scanner.layer3_dynamic.container_pool import ContainerPool
+                pool = ContainerPool(size=pool_size)
+                pool.start()
+                self._pool = pool
+                logger.info("Layer3DynamicAnalyzer: container pool started (size=%d)", pool_size)
+            except Exception as exc:
+                logger.warning(
+                    "Layer3DynamicAnalyzer: ContainerPool startup failed (%s: %s) — "
+                    "falling back to per-scan containers.",
+                    type(exc).__name__,
+                    exc,
+                )
 
     def analyze(
         self,
@@ -131,9 +152,12 @@ class Layer3DynamicAnalyzer:
             )
             return self._run_agent_simulation(manifest)
 
-        # ── Python execution path (unchanged from original) ──────────────
-        executor = self._get_executor()
-        trace = executor.run(py_source, manifest)
+        # ── Python execution path ─────────────────────────────────────────
+        if self._pool is not None:
+            trace = self._pool.run_in_pool(py_source, manifest)
+        else:
+            executor = self._get_executor()
+            trace = executor.run(py_source, manifest)
 
         from scanner.layer3_dynamic.trace_analyzer import TraceAnalyzer
         analyzer = TraceAnalyzer()
@@ -187,9 +211,12 @@ class Layer3DynamicAnalyzer:
                 agent_tool_call_count=len(result.tool_calls),
             )
 
-        # Reuse existing executor → ExecutionTrace → TraceAnalyzer
-        executor = self._get_executor()
-        trace = executor.run_script(script, manifest)
+        # Reuse existing executor (or pool) → ExecutionTrace → TraceAnalyzer
+        if self._pool is not None:
+            trace = self._pool.run_in_pool(script, manifest)
+        else:
+            executor = self._get_executor()
+            trace = executor.run_script(script, manifest)
 
         from scanner.layer3_dynamic.trace_analyzer import TraceAnalyzer
         matches, flags = TraceAnalyzer().analyze(trace, manifest)

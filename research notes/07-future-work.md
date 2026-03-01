@@ -278,8 +278,35 @@ then compare the prediction against observed Docker sandbox execution. The diver
 between predicted and actual behaviour is a richer signal than simple permission audit.
 Maps naturally to the Layer 3 stub — implement as a prediction step before sandbox run.
 
-### Fine-tune Local Model on Fixture Corpus
-Train a compact classifier (binary BLOCK/SAFE) from the fixture corpus via fine-tuning
-a small LM (e.g., DistilBERT on tool description text). 76 fixtures is too small without
-synthetic augmentation. Risk: black-box model is harder to audit in a security context.
-Paper placement: future work alongside L3.
+### ~~Fine-tune Local Model on Fixture Corpus~~ ✓ DONE (2026-02-28)
+
+**Implemented:** Two-stage L2 hybrid inference — finetuned local LoRA model as pre-filter + Haiku escalation.
+
+**Architecture:**
+```
+--semantic --local-model finetuning/adapter/
+    LocalLLMJudge (Phi-3.5-mini-instruct, 3.8B, MPS, float32 + LoRA r=16)
+         ↓ confident (≥ 0.80)?
+        YES → return local verdict (0 API tokens)
+         NO → escalate to full Haiku pipeline
+```
+
+**Files created:**
+- `finetuning/data_pipeline.py` — parse all 101 fixtures → JSONL (80/20 stratified split)
+- `finetuning/augmentor.py` — deterministic synthetic augmentation (4× via synonym swap, whitespace variation, padding, attack rephrase)
+- `finetuning/train.py` — PEFT/TRL SFTTrainer, MPS-compatible (float32, no QLoRA)
+- `finetuning/evaluate.py` — accuracy/P/R/F1/escalation-rate/confusion-matrix
+- `scanner/layer2_semantic/local_judge.py` — `LocalLLMJudge` (lazy model load, JudgeResponseParser reuse)
+- Modified: `Layer2Analyzer`, `RiskReport_L2` (`local_model_used`, `local_model_escalated`), CLI (`--local-model`, `--escalation-threshold`)
+
+**Key design choices:**
+- `PARSE_ERROR → escalate` (fail-open safety invariant)
+- Local model outputs same 5-field JSON schema as Haiku (reuses JudgeResponseParser)
+- `local_model_used` / `local_model_escalated` flags enable post-hoc escalation rate measurement
+- Dependencies isolated to `[tool.poetry.group.finetuning]` optional group (no impact on base install)
+
+**Open questions remaining:**
+- Actual escalation rate on validation set (requires training run)
+- FPR of local model vs. Haiku (local model may have higher FPR — acceptable if escalation catches)
+- Whether local model improves latency sufficiently to justify training cost for research use case
+- Adversarial robustness of local model vs. Haiku (local model may be weaker on E016–E020 evasion class)

@@ -198,3 +198,25 @@ rules:
     remediation: >
       Declare env:read in permissions and document which variables are accessed,
       or remove the env access.
+
+  - id: PE-009
+    name: "Unsafe Deserialization (RCE Vector)"
+    severity: CRITICAL
+    attack_vector: T4_PRIVILEGE_ESCALATION
+    detection:
+      type: ast_call
+      modules: [pickle, cPickle, marshal, shelve, dill]
+      function_names: [loads, load, Unpickler, open]
+      context: tool_function_body
+    base_confidence: 0.92
+    rationale: >
+      Deserializing untrusted data with pickle/marshal/shelve is a remote code
+      execution vector. Any Python callable can be embedded in a pickle byte
+      stream and executed on load. This is exploitable via supply-chain injection
+      (T1) or tool description injection (T3) that directs the agent to load an
+      attacker-controlled payload.
+    remediation: >
+      Never deserialize data from untrusted sources. Use json.loads() for data
+      exchange. If pickle is unavoidable, cryptographically sign payloads before
+      serialization and verify signatures before deserialization.
+    tags: [rce, deserialization, pickle, marshal, shelve]

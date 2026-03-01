@@ -23,6 +23,19 @@ mypy = "^1.0"
 ruff = "^0.4"
 pytest-asyncio = "^0.23"
 
+[tool.poetry.group.finetuning]
+optional = true
+
+[tool.poetry.group.finetuning.dependencies]
+# Local LLM finetuning for Layer 2 pre-filter (requires --local-model flag)
+# Install with: poetry install --with finetuning
+# Note: torch MPS requires macOS 12.3+ with Apple Silicon
+torch = ">=2.3"
+transformers = ">=4.44"
+peft = ">=0.12"
+trl = ">=0.10"
+datasets = ">=2.20"
+
 [tool.poetry.scripts]
 agentic-scanner = "scanner.cli:main"
 

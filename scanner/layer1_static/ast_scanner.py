@@ -75,6 +75,14 @@ _DANGEROUS_BUILTINS = {"eval", "exec", "compile", "__import__", "open"}
 _ENTROPY_THRESHOLD: float = 4.5   # bits/char — matches exfiltration.yaml EX-003
 _ENTROPY_MIN_LENGTH: int  = 64    # chars     — matches exfiltration.yaml EX-003
 
+_DESERIALIZATION_FUNCS = {
+    "pickle.loads", "pickle.load", "pickle.Unpickler",
+    "cPickle.loads", "cPickle.load",
+    "marshal.loads", "marshal.load",
+    "shelve.open",
+    "dill.loads", "dill.load",
+}
+
 
 def _shannon_entropy(s: str) -> float:
     """Shannon entropy in bits/char. Returns 0.0 for empty strings."""
@@ -127,7 +135,8 @@ def _snippet(path: Path, line: int) -> str | None:
 def _string_concat_resolves_to(node: ast.AST) -> str | None:
     """
     Attempt to statically resolve a string concatenation to a constant string.
-    Handles ast.Constant and ast.BinOp(op=ast.Add) nodes recursively.
+    Handles ast.Constant, ast.BinOp(op=ast.Add), and ast.JoinedStr (f-strings)
+    with all-constant format values.
     Returns the resolved string or None if not resolvable.
     """
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
@@ -137,7 +146,42 @@ def _string_concat_resolves_to(node: ast.AST) -> str | None:
         right = _string_concat_resolves_to(node.right)
         if left is not None and right is not None:
             return left + right
+    if isinstance(node, ast.JoinedStr):
+        parts = []
+        for value in node.values:
+            if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                parts.append(value.value)
+            elif (
+                isinstance(value, ast.FormattedValue)
+                and value.conversion == -1
+                and value.format_spec is None
+            ):
+                resolved = _string_concat_resolves_to(value.value)
+                if resolved is None:
+                    return None  # dynamic expression — can't resolve statically
+                parts.append(resolved)
+            else:
+                return None  # format spec or conversion — too dynamic
+        return "".join(parts)
     return None
+
+
+def _resolve_alias(call_name: str, aliases: dict[str, str]) -> str:
+    """
+    Substitute the first component of a call name with its real module if aliased.
+
+    Examples:
+      "r.get"   + {"r": "requests"}          → "requests.get"
+      "fetch"   + {"fetch": "requests.get"}  → "requests.get"
+      "np.save" + {"np": "numpy"}            → "numpy.save"
+    """
+    if not aliases:
+        return call_name
+    first, _, rest = call_name.partition(".")
+    if first in aliases:
+        real = aliases[first]
+        return f"{real}.{rest}" if rest else real
+    return call_name
 
 
 # ── AST Scan state ────────────────────────────────────────────────────────────
@@ -149,6 +193,8 @@ class ASTScanState:
     dynamic_import_detected: bool = False
     subprocess_in_tool_body: bool = False
     undeclared_network_access: bool = False
+    import_aliases: dict[str, str] = field(default_factory=dict)
+    """Maps alias → real module/function path (e.g. {"r": "requests", "fetch": "requests.get"})."""
 
 
 # ── ASTScanner class ──────────────────────────────────────────────────────────
@@ -220,9 +266,19 @@ class ASTScanner:
         state: ASTScanState,
     ) -> None:
         if isinstance(node, ast.Import):
-            modules = [alias.name.split(".")[0] for alias in node.names]
+            modules = []
+            for alias in node.names:
+                root = alias.name.split(".")[0]
+                modules.append(root)
+                if alias.asname:
+                    state.import_aliases[alias.asname] = root
         elif node.module:
-            modules = [node.module.split(".")[0]]
+            root = node.module.split(".")[0]
+            modules = [root]
+            for alias in node.names:
+                if alias.asname:
+                    # `from requests import get as fetch` → "fetch" → "requests.get"
+                    state.import_aliases[alias.asname] = f"{root}.{alias.name}"
         else:
             return
 
@@ -271,6 +327,8 @@ class ASTScanner:
             # Still check for getattr-based obfuscation even without a simple name
             self._check_getattr_obfusc(node, path, state)
             return
+
+        call_name = _resolve_alias(call_name, state.import_aliases)
 
         ev = Evidence(
             file_path=str(path),
@@ -330,6 +388,10 @@ class ASTScanner:
             state.exercised_permissions.add(Permission.ENV_READ)
             if Permission.ENV_READ not in declared_permissions:
                 state.matches.append(self._match("PE-008", evidence=[ev]))
+
+        # Unsafe deserialization → PE-009
+        if call_name in _DESERIALIZATION_FUNCS:
+            state.matches.append(self._match("PE-009", evidence=[ev]))
 
         # getattr obfusc check for named calls too
         self._check_getattr_obfusc(node, path, state)

@@ -4,7 +4,7 @@
 
 ```
 Layer 1: Static Analysis     (milliseconds,  no LLM, no network required)
-Layer 2: Semantic Analysis   (seconds,        LLM judge, API call)
+Layer 2: Semantic Analysis   (seconds,        LLM judge, API call — or local model pre-filter)
 Layer 3: Dynamic Analysis    (minutes,        Docker sandbox, network monitoring)
 ```
 
@@ -14,6 +14,29 @@ The layers are ordered by cost and recall:
 - L3 catches runtime-only behaviors (covert channels, encrypted exfil) → expensive, used selectively
 
 **Design rationale:** Only proceed to L2/L3 if L1 is inconclusive. This keeps median scan time < 100ms for clean packages.
+
+### Layer 2 Hybrid Inference Architecture (2026-02-28)
+
+When `--local-model finetuning/adapter/` is passed, L2 uses a two-stage inference path:
+
+```
+scan --semantic --local-model ./finetuning/adapter/
+         │
+         ▼
+  LocalLLMJudge (Phi-3.5-mini, MPS, ~200ms)
+         │
+    confidence ≥ 0.80?
+    ┌────┴────┐
+   YES        NO (or PARSE_ERROR)
+    │          │
+  return       escalate → AnthropicJudgeClient (Haiku)
+  local               full L2 pipeline runs unchanged
+  verdict
+```
+
+This reduces API calls by an estimated 60–80% on production corpora (majority clean inputs).
+The `RiskReport_L2.local_model_used` and `.local_model_escalated` fields record which path was taken.
+All ML dependencies are optional (`poetry install --with finetuning`).
 
 ## Unified Input Abstraction: `SkillManifest`
 

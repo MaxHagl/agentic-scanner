@@ -96,6 +96,8 @@ class RiskReport_L2(BaseModel):
     description_code_mismatch: bool = False
     permission_delta_critical: bool = False
     field_risk_scores: dict[str, float] = Field(default_factory=dict)
+    local_model_used: bool = False
+    local_model_escalated: bool = False
 
     @computed_field
     @property

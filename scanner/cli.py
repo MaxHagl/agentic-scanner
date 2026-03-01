@@ -65,6 +65,38 @@ def main() -> None:
     default=None,
     help="Write SARIF 2.1.0 output to the given file path.",
 )
+@click.option(
+    "--html-report",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Write self-contained HTML report to the given file path.",
+)
+@click.option(
+    "--pool-size",
+    type=int,
+    default=0,
+    help="Pre-warm N containers for Layer 3 scanning (requires --dynamic). Default 0 = off.",
+)
+@click.option(
+    "--local-model",
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+    help=(
+        "Path to finetuned LoRA adapter directory for Layer 2 pre-filtering "
+        "(requires --semantic). The local model runs first and escalates to Haiku "
+        "only when confidence < --escalation-threshold."
+    ),
+)
+@click.option(
+    "--escalation-threshold",
+    type=float,
+    default=0.80,
+    show_default=True,
+    help=(
+        "Confidence threshold below which the local model escalates to Haiku "
+        "(requires --local-model). Default: 0.80."
+    ),
+)
 def scan_command(
     target: str,
     source_files: tuple[Path, ...],
@@ -73,8 +105,12 @@ def scan_command(
     dynamic: bool,
     json_output: bool,
     sarif_out: Path | None,
+    html_report: Path | None,
+    pool_size: int,
+    local_model: Path | None,
+    escalation_threshold: float,
 ) -> None:
-    console = Console()
+    console = Console(record=True)
     started = time.perf_counter()
 
     tmp_path: Path | None = None
@@ -107,8 +143,17 @@ def scan_command(
                     "to be set. Skipping Layer 2."
                 )
             else:
+                if local_model is not None and not local_model.exists():
+                    console.print(
+                        f"[bold yellow]Warning:[/bold yellow] --local-model path does not exist: "
+                        f"{local_model}. Ignoring local model."
+                    )
+                    local_model = None
                 from scanner.layer2_semantic import Layer2Analyzer
-                analyzer = Layer2Analyzer()
+                analyzer = Layer2Analyzer(
+                    local_model_path=local_model,
+                    escalation_threshold=escalation_threshold,
+                )
                 l2_report = analyzer.analyze(manifest, l1_report)
 
         l3_report = None
@@ -123,7 +168,7 @@ def scan_command(
                 )
             else:
                 from scanner.layer3_dynamic import Layer3DynamicAnalyzer
-                analyzer3 = Layer3DynamicAnalyzer()
+                analyzer3 = Layer3DynamicAnalyzer(pool_size=pool_size)
                 l3_report = analyzer3.analyze(manifest, l1_report, source_path=scan_path)
 
         if l3_report is not None:
@@ -167,11 +212,19 @@ def scan_command(
             l2_verdict = l2_report.llm_judge_verdict or "N/A"
             l2_conf = l2_report.llm_judge_confidence
             l2_conf_str = f"{l2_conf:.0%}" if l2_conf is not None else "—"
+            # L2 mode label: which inference path was used?
+            if l2_report.local_model_used and l2_report.local_model_escalated:
+                l2_mode = "local (escalated to Haiku)"
+            elif l2_report.local_model_used:
+                l2_mode = "local (confident)"
+            else:
+                l2_mode = "Haiku only"
             console.print(
                 f"  L1 score: {verdict.l1_score:.4f} | "
                 f"L2 score: {verdict.l2_score:.4f} | "
                 f"LLM verdict: {l2_verdict} ({l2_conf_str}) | "
-                f"Tokens: {verdict.llm_tokens_consumed}"
+                f"Tokens: {verdict.llm_tokens_consumed} | "
+                f"L2 mode: {l2_mode}"
             )
         if l3_report is not None:
             l3_score_val = verdict.l3_score if verdict.l3_score is not None else 0.0
@@ -217,6 +270,11 @@ def scan_command(
             console.print(table)
         else:
             console.print("No findings.")
+
+    if html_report is not None:
+        html_report.parent.mkdir(parents=True, exist_ok=True)
+        html_report.write_text(console.export_html(), encoding="utf-8")
+        console.print(f"HTML report written to: [cyan]{html_report}[/cyan]")
 
     if verdict.verdict == "BLOCK":
         raise SystemExit(2)

@@ -160,6 +160,45 @@ def test_cli_scan_catches_base64_payload(tmp_path: Path) -> None:
     assert "PI-001" in result.output
 
 
+def test_cli_html_report_creates_file(tmp_path: Path) -> None:
+    """--html-report should produce a valid HTML file at the given path."""
+    fixture = (
+        Path(__file__).resolve().parents[2]
+        / "fixtures"
+        / "mcp"
+        / "MCP-001-prompt-injection-description.json"
+    )
+    html_out = tmp_path / "report.html"
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["scan", str(fixture), "--html-report", str(html_out)])
+
+    assert html_out.exists(), "HTML report file should be created"
+    content = html_out.read_text(encoding="utf-8")
+    assert "<html" in content.lower(), "Report should be valid HTML"
+    assert "BLOCK" in content or "WARN" in content or "SAFE" in content, (
+        "Report should contain verdict"
+    )
+
+
+def test_cli_html_report_written_message_shown(tmp_path: Path) -> None:
+    """CLI should print the path of the written HTML report."""
+    fixture = (
+        Path(__file__).resolve().parents[2]
+        / "fixtures"
+        / "mcp"
+        / "MCP-001-prompt-injection-description.json"
+    )
+    html_out = tmp_path / "report.html"
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["scan", str(fixture), "--html-report", str(html_out)])
+
+    assert "HTML report written to" in result.output
+    # Rich may line-wrap long paths; check the filename is present
+    assert html_out.name in result.output
+
+
 def test_confidence_calibration_increases_for_authority_and_stealth(tmp_path: Path) -> None:
     fixture = tmp_path / "calibration.md"
     fixture.write_text(
