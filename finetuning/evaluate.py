@@ -102,9 +102,9 @@ def _load_model_and_tokenizer(adapter_path: Path) -> tuple[Any, Any, Any]:
 
     base = AutoModelForCausalLM.from_pretrained(
         base_model,
-        dtype=torch.float32,
+        torch_dtype=torch.float32,
         trust_remote_code=True,
-        attn_implementation="eager",  # bypass Phi-3.5-mini sliding-window path that breaks DynamicCache
+        attn_implementation="eager",
     ).to(device)
 
     model = PeftModel.from_pretrained(base, str(adapter_path))

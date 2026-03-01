@@ -181,9 +181,9 @@ class LocalLLMJudge:
 
         base = AutoModelForCausalLM.from_pretrained(
             base_model,
-            dtype=torch.float32,
+            torch_dtype=torch.float32,
             trust_remote_code=True,
-            attn_implementation="eager",  # bypass Phi-3.5-mini sliding-window DynamicCache bug
+            attn_implementation="eager",
         ).to(device)
 
         model = PeftModel.from_pretrained(base, str(self._adapter_path))
