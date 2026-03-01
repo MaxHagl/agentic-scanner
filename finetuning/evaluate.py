@@ -94,7 +94,9 @@ def _load_model_and_tokenizer(adapter_path: Path) -> tuple[Any, Any, Any]:
         device = torch.device("cpu")
     print(f"[INFO] Device: {device}")
 
-    tokenizer = AutoTokenizer.from_pretrained(str(adapter_path), trust_remote_code=True)
+    # Load tokenizer from the base model to avoid TokenizersBackend mismatch
+    # (adapter tokenizer_config.json may reference a class not in the installed version)
+    tokenizer = AutoTokenizer.from_pretrained(base_model, trust_remote_code=True)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
