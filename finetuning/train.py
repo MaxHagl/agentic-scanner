@@ -154,25 +154,25 @@ def train(
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    # ── Load base model in float32 (MPS constraint — no fp16/bf16) ───────────
+    # ── Load base model in float32 (MPS constraint — no fp16/bf16 for backward) ─
     print("[INFO] Loading base model (float32)...")
     model = AutoModelForCausalLM.from_pretrained(
         base_model,
-        dtype=torch.float32,          # replaces deprecated torch_dtype
+        torch_dtype=torch.float32,    # torch_dtype= is correct for transformers 4.46.x
         trust_remote_code=True,
     )
     model = model.to(device)
 
     # ── Apply LoRA adapter ────────────────────────────────────────────────────
     # Auto-detect correct attention projection names for the loaded model.
-    # Phi-3.x: "qkv_proj" + "o_proj"  (combined QKV)
-    # LLaMA / Mistral: "q_proj" + "v_proj"  (separate)
+    # Qwen2.5 / LLaMA / Mistral: "q_proj" + "v_proj"  (separate projections)
+    # Phi-3.x: "qkv_proj" + "o_proj"  (combined QKV — no longer default)
     # Fallback: target all linear layers automatically.
     named_modules = {name for name, _ in model.named_modules()}
     if any("qkv_proj" in n for n in named_modules):
         detected_target = ["qkv_proj", "o_proj"]   # Phi-3.x family
     elif any("q_proj" in n for n in named_modules):
-        detected_target = ["q_proj", "v_proj"]      # LLaMA / Mistral
+        detected_target = ["q_proj", "v_proj"]      # Qwen2.5 / LLaMA / Mistral
     else:
         detected_target = "all-linear"              # safe fallback
     print(f"[INFO] LoRA target modules: {detected_target}")
