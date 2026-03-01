@@ -133,12 +133,12 @@ def train(
     output_dir: Path,
     epochs: int = 3,
     learning_rate: float = 2e-4,
-    per_device_batch: int = 2,
-    grad_accum: int = 4,
+    per_device_batch: int = 1,   # batch=2 doubles per-step MPS allocation; keep at 1
+    grad_accum: int = 8,         # compensate: effective batch = 8 (was 2×4=8)
     lora_r: int = 16,
     lora_alpha: int = 32,
     lora_dropout: float = 0.05,
-    max_seq_length: int = 2048,
+    max_seq_length: int = 256,  # skill descriptions are short; 2048 causes ~2GB/step MPS leak
 ) -> None:
     torch, (AutoModelForCausalLM, AutoTokenizer), (LoraConfig, get_peft_model, TaskType), (SFTConfig, SFTTrainer), Dataset = _require_imports()
 
@@ -231,12 +231,30 @@ def train(
         report_to="none",  # disable wandb/tensorboard
     )
 
+    # ── MPS memory callback ───────────────────────────────────────────────────
+    # MPS allocator expands its pool ~2GB/step but never shrinks between steps.
+    # Calling empty_cache() after every step keeps memory stable.
+    from transformers import TrainerCallback
+    import gc
+
+    class MPSMemoryCallback(TrainerCallback):
+        def on_step_end(self, args, state, control, **kwargs):
+            if hasattr(torch, "mps") and torch.backends.mps.is_available():
+                torch.mps.empty_cache()
+            gc.collect()
+
+        def on_evaluate(self, args, state, control, **kwargs):
+            if hasattr(torch, "mps") and torch.backends.mps.is_available():
+                torch.mps.empty_cache()
+            gc.collect()
+
     trainer = SFTTrainer(
         model=model,
         args=sft_config,
         train_dataset=train_dataset,
         eval_dataset=val_dataset,
-        tokenizer=tokenizer,  # trl 0.14.x uses 'tokenizer' (renamed to 'processing_class' in ≥0.15)
+        tokenizer=tokenizer,
+        callbacks=[MPSMemoryCallback()],
     )
 
     # ── Train ─────────────────────────────────────────────────────────────────
