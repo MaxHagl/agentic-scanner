@@ -101,13 +101,11 @@ def _load_model_and_tokenizer(adapter_path: Path) -> tuple[Any, Any, Any]:
         tokenizer.pad_token = tokenizer.eos_token
 
     # float16 for inference (halves VRAM vs float32); low_cpu_mem_usage streams
-    # shards directly to MPS instead of double-buffering in CPU RAM first.
-    # Note: train.py still uses float32 — MPS requires it for LoRA backward.
+    # shards to MPS instead of double-buffering in CPU RAM.
     base = AutoModelForCausalLM.from_pretrained(
         base_model,
         torch_dtype=torch.float16,
         trust_remote_code=True,
-        attn_implementation="eager",
         low_cpu_mem_usage=True,
     ).to(device)
 
@@ -139,11 +137,14 @@ def _run_inference(
     with torch.no_grad():
         outputs = model.generate(
             **inputs,
-            max_new_tokens=128,       # JSON outputs are short; 256 wastes activation memory
+            max_new_tokens=128,
             do_sample=False,
             temperature=1.0,
             pad_token_id=tokenizer.eos_token_id,
-            use_cache=False,
+            # use_cache=True (default) — required for memory efficiency.
+            # With use_cache=False, every new token does a full forward pass
+            # through the growing sequence, causing 40GB+ memory accumulation.
+            # transformers 4.46.3 has DynamicCache.seen_tokens, so it works.
         )
 
     # Decode only the newly generated tokens
