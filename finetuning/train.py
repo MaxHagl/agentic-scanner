@@ -225,7 +225,7 @@ def train(
         load_best_model_at_end=True,
         metric_for_best_model="eval_loss",
         greater_is_better=False,
-        max_length=max_seq_length,   # trl ≥0.15: max_seq_length renamed to max_length
+        max_seq_length=max_seq_length,  # trl 0.14.x uses max_seq_length (renamed to max_length in ≥0.15)
         dataset_text_field="text",
         packing=False,
         report_to="none",  # disable wandb/tensorboard
@@ -236,7 +236,7 @@ def train(
         args=sft_config,
         train_dataset=train_dataset,
         eval_dataset=val_dataset,
-        processing_class=tokenizer,  # trl ≥0.15: 'tokenizer' renamed to 'processing_class'
+        tokenizer=tokenizer,  # trl 0.14.x uses 'tokenizer' (renamed to 'processing_class' in ≥0.15)
     )
 
     # ── Train ─────────────────────────────────────────────────────────────────
