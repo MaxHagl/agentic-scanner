@@ -1,0 +1,11 @@
+{
+  "base_model": "Qwen/Qwen2.5-0.5B-Instruct",
+  "train_file": "/Users/maximilianhagl/Library/CloudStorage/OneDrive-Personal/College/research project/agentic-scanner/finetuning/data/train_augmented.jsonl",
+  "val_file": "/Users/maximilianhagl/Library/CloudStorage/OneDrive-Personal/College/research project/agentic-scanner/finetuning/data/val.jsonl",
+  "epochs": 3,
+  "lora_r": 16,
+  "lora_alpha": 32,
+  "learning_rate": 0.0002,
+  "per_device_batch": 2,
+  "grad_accum": 4
+}
