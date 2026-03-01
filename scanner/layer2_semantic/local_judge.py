@@ -225,7 +225,7 @@ class LocalLLMJudge:
         logger.warning(
             "LocalLLMJudge: could not determine base model — defaulting to Qwen2.5-1.5B-Instruct"
         )
-        return "Qwen/Qwen2.5-1.5B-Instruct"
+        return "Qwen/Qwen2.5-0.5B-Instruct"
 
     # ── Inference ─────────────────────────────────────────────────────────────
 
