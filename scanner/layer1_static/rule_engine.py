@@ -510,7 +510,7 @@ def _load_rule_metadata(rules_dir: Path) -> dict[str, _RuleMeta]:
     meta["PE-DELTA-001"] = _RuleMeta(
         rule_id="PE-DELTA-001",
         name="Permission Delta: Undeclared Exercised Permissions",
-        severity=Severity.CRITICAL,
+        severity=Severity.HIGH,
         attack_vector=AttackVector.T4_PRIVILEGE_ESCALATION,
         confidence=0.9,
         rationale=(

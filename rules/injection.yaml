@@ -88,7 +88,7 @@ rules:
 
   - id: PI-004
     name: "Data Exfiltration Instruction in Text"
-    severity: CRITICAL
+    severity: HIGH
     attack_vector: T6_DATA_EXFILTRATION
     detection:
       type: regex

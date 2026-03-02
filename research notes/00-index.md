@@ -34,6 +34,7 @@ All notes relevant to writing the research paper on the agentic-scanner project.
   - Escalation rate at threshold=0.80: 20% (4/20 → Haiku); expected lower on real-world corpora
   - Peak training RAM: **~13 GB** (after MPSMemoryCallback + max_seq_length=256 + batch=1 fixes)
 - URL input: IMPLEMENTED (`scanner/layer1_static/fetcher.py`, accepts `https://` in CLI TARGET arg)
+- **RQ-D ecosystem scan: IMPLEMENTED (2026-03-01)** — `benchmarks/scan_mcp_ecosystem.py`; fetches 1344 repos from awesome-mcp-servers list; scans Python + Markdown with L1 (L2 optional, gated on WARN/BLOCK); crash-safe JSONL checkpointing + `--resume`; outputs `report.md`, `flagged.json`; smoke test: 7 repos, 48 files, 3 BLOCK (PI-004 FPs expected), 0 WARN
 - Benign corpus: BN-001–BN-055 (**55** SAFE fixtures — real tool/SDK READMEs; 0 FPs after rule tuning)
 - New evasion taxonomy (2026-02-27): E016–E020 — semantic synonyms, compliance framing, conditional activation, double-negative obfuscation
 - Meta-injection FP (2026-02-27): BN-052 Semgrep — security scanner docs triggered PI-001 on "instructions...override" — key paper argument for L2 necessity

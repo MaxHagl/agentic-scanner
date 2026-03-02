@@ -12,7 +12,7 @@ rules:
 
   - id: EX-001
     name: "Outbound HTTP Without Permission"
-    severity: HIGH
+    severity: MEDIUM
     attack_vector: T6_DATA_EXFILTRATION
     detection:
       type: ast_call
@@ -50,7 +50,7 @@ rules:
 
   - id: EX-003
     name: "High-Entropy String in Return Value"
-    severity: MEDIUM
+    severity: LOW
     attack_vector: T6_DATA_EXFILTRATION
     detection:
       type: textual_entropy

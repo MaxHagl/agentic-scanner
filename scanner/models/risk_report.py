@@ -48,7 +48,21 @@ _LAMBDA = 1.2
 
 
 def _score(matches: list[RuleMatch], bonus: float = 0.0) -> float:
-    total = sum(_WEIGHTS[m.severity] * m.confidence for m in matches) + bonus
+    # Group by rule_id to apply diminishing returns for repeated violations of the same rule.
+    # A single file accessing os.environ 10 times shouldn't compound from MEDIUM to BLOCK.
+    from collections import defaultdict
+    rule_counts = defaultdict(list)
+    for m in matches:
+        rule_counts[m.rule_id].append(_WEIGHTS[m.severity] * m.confidence)
+    
+    total = bonus
+    for scores in rule_counts.values():
+        scores.sort(reverse=True)
+        # Diminishing returns: 1st hit = 100%, 2nd = 50%, 3rd = 25%, etc.
+        # Max cap for infinite hits of the same rule is 2x the base score.
+        rule_total = sum(score * (0.5 ** i) for i, score in enumerate(scores))
+        total += rule_total
+
     return round(1.0 - math.exp(-_LAMBDA * total), 4)
 
 

@@ -1,6 +1,67 @@
 # In-the-Wild Benchmark Analysis
 
-**Date:** 2026-03-01
+**Last updated:** 2026-03-01
+
+---
+
+## Study 2: MCP Ecosystem Scan (RQ-D) — 2026-03-01
+
+**Script:** `benchmarks/scan_mcp_ecosystem.py`
+**Source:** [awesome-mcp-servers](https://github.com/punkpeye/awesome-mcp-servers) curated list
+**Scale:** 1344 unique repos discovered; scan configurable via `--max-repos` (default 500)
+
+### Purpose
+
+Answer **RQ-D: "Are any publicly available MCP servers actually malicious?"**
+
+This is a large-scale population-level study scanning the full MCP community ecosystem — both Python source files and Markdown READMEs — with L1 static analysis (and optionally L2 semantic). This improves substantially on Study 1 (below) which only scanned 67 tool endpoints from 3 trusted repos.
+
+### Scanner Architecture
+
+- **Data source:** Parses all `https://github.com/<owner>/<repo>` URLs from the awesome-mcp-servers README via regex
+- **Clone strategy:** `git clone --depth 1` with 120s timeout; `--resume` flag for crash-safe incremental runs
+- **Files scanned per repo:** Up to 10 Markdown files + all non-test Python files
+- **Checkpointing:** JSONL (one JSON object per repo line) — written after each repo so any crash is recoverable
+- **L2 gate:** Only runs on repos where at least one WARN/BLOCK file was found (saves API costs)
+- **Output:** `benchmarks/mcp_scan_results/report.md`, `checkpoint.jsonl`, `flagged.json`
+
+### Key Design Decisions (for paper)
+
+1. **Markdown-inclusive scanning:** Previous in-the-wild scan missed READMEs entirely. The ecosystem scan includes them, catching prompt-injection attacks embedded in documentation (T2/T3).
+2. **L2 only on flagged repos:** Running L2 on all ~50,000 expected files would cost thousands of API tokens. Gating on L1 verdict reduces L2 invocations to the ~5–15% of repos that have at least one WARN/BLOCK file.
+3. **Per-file FileResult + per-repo RepoResult:** Enables both aggregate statistics (precision/recall at population level) and manual review of specific flagged evidence.
+
+### Usage
+
+```bash
+# Quick smoke test (5 repos):
+poetry run python benchmarks/scan_mcp_ecosystem.py --max-repos 5 --out-dir benchmarks/mcp_scan_results
+
+# Full run (all 500):
+poetry run python benchmarks/scan_mcp_ecosystem.py --max-repos 500
+
+# With L2 semantic analysis on WARN/BLOCK repos:
+poetry run python benchmarks/scan_mcp_ecosystem.py --max-repos 500 --semantic
+
+# Resume after crash:
+poetry run python benchmarks/scan_mcp_ecosystem.py --max-repos 500 --resume
+```
+
+### Preliminary Results (smoke test, 7 repos, 2026-03-01)
+
+| Repos | Files | BLOCK repos | WARN repos | SAFE repos |
+|-------|-------|-------------|------------|------------|
+| 7 | 48 | 3 (42.9%) | 0 | 4 (57.1%) |
+
+Observed BLOCK triggers: all `PI-004` (intent template matching) on CHANGELOG/README files containing "secret-token" + "api endpoint" patterns — consistent with previously-documented L1 FP tendencies on developer documentation. **L2 analysis is expected to reclassify most of these as SAFE.**
+
+Full 500-repo run results to be recorded here after execution.
+
+---
+
+## Study 1: Local LLM Pre-filter Validation — 2026-03-01
+
+**Script:** `benchmarks/run_in_the_wild.py`
 **Model:** Qwen2.5-0.5B-Instruct (Local Adapter from Iteration 2)
 **Cloud LLM (L3):** Claude 3.5 Haiku
 
