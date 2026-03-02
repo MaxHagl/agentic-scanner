@@ -363,6 +363,45 @@ L3 is only invoked with `--dynamic` flag; fail-open on Docker unavailability.
 
 **Paper note:** The WARN verdict is a calibration observation, not a detection failure. The exfiltration attempt *was* caught — `net_egress: True` proves the conditional branch executed and the socket connect was intercepted. L3-DYN-004 firing on a fixture that returns L1=SAFE is the cleanest empirical proof of L3's unique value.
 
+### Full 3-Layer Live Validation — E019 (2026-03-02)
+
+**Fixture:** `tests/fixtures/adversarial/E019-conditional-impl.py`
+**Command:** `poetry run agentic-scanner scan E019-conditional-impl.py --semantic --dynamic --local-model finetuning/adapter/ --escalation-threshold 0.80 --l3-local-gate --html-report /tmp/full-scan-E019.html --json-output`
+
+This is the **maximum-security, all-layers** scan — every feature active simultaneously.
+
+| Layer | Score | Key Signal |
+|---|---|---|
+| L1 | 0.0000 | 0 findings — L1 blind to conditional import (by design) |
+| L2 | 0.4893 | Local LoRA model classified SUSPICIOUS at ≥80% confidence — **no Haiku API call made** |
+| L3 | 0.9123 | L3-DYN-004 fired: `socket.connect("telemetry.internal", 8443)` × 2 intercepted |
+| **Fused** | **0.4672** | `(0.0 + 0.4893 + 0.9123) / 3` — WARN range (0.35–0.74) |
+
+**Final verdict: `WARN`** — all three layers executed; conditional payload caught at runtime.
+
+**Key findings:**
+- `layers_executed: ["L1", "L2", "L3"]` — all layers confirmed active
+- `llm_tokens_consumed: 0` — local LoRA pre-filter was confident enough (≥0.80) that Haiku was not needed; L2 cost = $0 for this fixture
+- `total_scan_time_ms: 4247` — complete 3-layer scan in 4.2 seconds
+- HTML report: `/tmp/full-scan-E019.html` (13 KB)
+
+**The `--l3-local-gate` flag had no effect here:** E019 is a `.py` file and takes the Docker execution path. The gate only activates for README-only files (source_path=None). All three layers ran unconditionally.
+
+**Local LoRA model efficiency finding:** With `--escalation-threshold 0.80`, the local model classified E019 as SUSPICIOUS with ≥80% confidence, skipping the Haiku call entirely. This demonstrates the pre-filter's real-world API reduction: the correct L2 risk signal was computed locally without any remote inference.
+
+**Score fusion formula validation:** `(0.0000 + 0.4893 + 0.9123) / 3 = 0.4672` — exactly matches `fused_risk_score` in JSON output. WARN threshold is 0.35–0.74; result lands firmly in the middle.
+
+| Verification criterion | Expected | Actual | Pass? |
+|---|---|---|---|
+| `verdict` | WARN | WARN | ✅ |
+| `l1_score` | ≈ 0.0 | 0.0000 | ✅ |
+| `l3_score` | > 0.35 | 0.9123 | ✅ |
+| `fused_risk_score` | 0.35–0.74 | 0.4672 | ✅ |
+| L3-DYN-004 fired | Yes | Yes (2× socket.connect) | ✅ |
+| `layers_executed` | [L1, L2, L3] | [L1, L2, L3] | ✅ |
+| HTML report | Generated | `/tmp/full-scan-E019.html` (13 KB) | ✅ |
+| `llm_tokens_consumed` | 0 (local model confident) | 0 | ✅ |
+
 ---
 
 ## Benchmark Infrastructure

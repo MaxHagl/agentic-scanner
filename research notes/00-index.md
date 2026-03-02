@@ -14,9 +14,10 @@ All notes relevant to writing the research paper on the agentic-scanner project.
 | `08-key-contributions.md` | Summary of novel contributions for the paper |
 | `09-local-llm-finetuning.md` | Local LLM finetuning — model selection, training, memory fixes, eval results |
 
-## Quick Stats (as of 2026-03-01)
+## Quick Stats (as of 2026-03-02)
 - Fixtures: **101** (MCP: 10, LangChain/LangGraph: **6**, README: **7**, Layer2: 3, Adversarial E-series: **20**, Benign: **55**)
-- Tests: **328** passing (up from 281), 2 skipped (live API tests)
+- Tests: **326** passing, 4 deselected (live API tests)
+- **Full 3-layer live validation (2026-03-02):** E019 with --semantic --dynamic --local-model → verdict WARN, l1=0.0, l2=0.4893 (local LoRA only, 0 Haiku calls), l3=0.9123, fused=0.4672, scan=4.25s
 - New modules: `finetuning/` package (data_pipeline.py, augmentor.py, train.py, evaluate.py) + `scanner/layer2_semantic/local_judge.py`
 - L1 full benchmark (81 fixtures, 22 malicious + 4 L2-only + **55 benign**): **Precision 100%, Recall 100%, F1 100%, FPR 0.0%**
 - Adversarial L1 benchmark (E001–E020): BLOCK=3/20, WARN=1/20, SAFE=16/20 (20% L1-only detection rate)
@@ -26,6 +27,9 @@ All notes relevant to writing the research paper on the agentic-scanner project.
 - **Layer 3 status: FULLY IMPLEMENTED** (Docker sandbox + **README agent simulation** via `--dynamic` flag, **119 mock-based tests**, all passing)
   - Python path: harness injection, synthetic inputs, 7 rules (L3-DYN-001–007)
   - README path (NEW 2026-02-28): AgentSimulator (Anthropic API) → ToolCallTranslator → DockerSandboxExecutor.run_script() → TraceAnalyzer
+  - **HTTP stub injection (2026-03-01)**: `requests`, `httpx`, `urllib3` stubbed in harness before module load — fixes MCP-007 false-negative where `python:3.12-slim` missing `requests` caused `exec_module()` abort before malicious `requests.post()` was reached
+  - **Smart fusion (2026-03-01)**: `fuse_layers_l3()` skips L3 score when `execution_failed=True` (missing deps caused import abort, not clean execution); prevents 0.0 L3 score from dragging down fused verdict
+  - **Docker auto-launch (2026-03-01)**: macOS only (`sys.platform == "darwin"`); CLI spawns `open -a Docker` and polls up to 30 s before falling back to warning
 - Layer 2 status: IMPLEMENTED (Claude Haiku, wired into CLI via `--semantic`, **20/20 adversarial caught**)
   - **Two-stage L2 hybrid inference** (2026-02-28): finetuned local LoRA model as fast pre-filter (`--local-model`); escalates to Haiku only when uncertain (confidence < threshold); estimated 60-80% API call reduction on clean-majority corpora
 - **Local LLM adapter: TRAINED (2026-03-01)** — `Qwen/Qwen2.5-0.5B-Instruct` + LoRA (see `09-local-llm-finetuning.md`)
