@@ -80,12 +80,15 @@ class Layer3DynamicAnalyzer:
         executor: object | None = None,
         agent_client: object | None = None,
         pool_size: int = 0,
+        local_judge: object | None = None,
     ) -> None:
         # executor: DockerSandboxExecutor instance, or None to use the real Docker executor.
         # agent_client: raw anthropic.Anthropic instance for AgentSimulator, or None.
-        # Both are injectable for tests to avoid requiring Docker daemon or API key.
+        # local_judge: LocalLLMJudge instance for README pre-filter gate, or None (gate inactive).
+        # All three are injectable for tests to avoid requiring Docker daemon or API key.
         self._executor = executor
         self._agent_client = agent_client
+        self._local_judge = local_judge  # None → gate inactive (default behaviour preserved)
         self._pool: object | None = None
 
         if pool_size > 0 and executor is None:
@@ -189,6 +192,40 @@ class Layer3DynamicAnalyzer:
         """
         if not manifest.readme_text:
             return RiskReport_L3()
+
+        # ── Local model pre-filter gate (only active when --l3-local-gate is set) ─
+        if self._local_judge is not None:
+            try:
+                from scanner.layer2_semantic.llm_judge import wrap_untrusted
+                from scanner.layer2_semantic.prompt_injection_detector import (
+                    _SYSTEM_PROMPT as _PI_SYSTEM_PROMPT,
+                )
+                local_response = self._local_judge.call(
+                    _PI_SYSTEM_PROMPT,
+                    wrap_untrusted(manifest.all_untrusted_text),
+                )
+                if (
+                    self._local_judge.is_confident(local_response)
+                    and local_response.verdict == "CLEAN"
+                ):
+                    logger.info(
+                        "L3 AgentSimulator skipped — local model confident BENIGN (%.2f)",
+                        local_response.confidence,
+                    )
+                    return RiskReport_L3(agent_sim_skipped_by_local_model=True)
+                # Not confident or not BENIGN → fall through to AgentSimulator
+                logger.debug(
+                    "L3 local gate: verdict=%s conf=%.2f — proceeding with AgentSimulator",
+                    local_response.verdict,
+                    local_response.confidence,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "L3 local gate failed — proceeding with AgentSimulator. Error: %s: %s",
+                    type(exc).__name__,
+                    exc,
+                )
+        # ── Proceed with AgentSimulator as normal ─────────────────────────────
 
         from scanner.layer3_dynamic.agent_simulator import AgentSimulator
         from scanner.layer3_dynamic.tool_call_executor import ToolCallTranslator

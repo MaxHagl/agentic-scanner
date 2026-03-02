@@ -96,9 +96,12 @@ def fuse_layers_l3(
     Verdict thresholds are identical to L1-only: BLOCK ≥ 0.75, WARN ≥ 0.35.
     CRITICAL findings from any layer always trigger BLOCK regardless of score.
     """
-    scores = [report_l1.composite_score, report_l3.composite_score]
+    scores = [report_l1.composite_score]
     if report_l2 is not None:
         scores.append(report_l2.composite_score)
+    if not report_l3.execution_failed:
+        scores.append(report_l3.composite_score)
+    # If execution_failed, L3 contributed no evidence — don't penalise the fused score
     fused_score = round(sum(scores) / len(scores), 4)
 
     all_findings = report_l1.matches + report_l3.matches
@@ -109,6 +112,11 @@ def fuse_layers_l3(
 
     confidence = min(1.0, max(0.55, 0.55 + fused_score * 0.4))
     hard_block_reasons = [f"{m.rule_id}: {m.rule_name}" for m in critical_findings]
+    if report_l3.execution_failed:
+        hard_block_reasons.append(
+            "L3 (execution failed — score excluded): "
+            + "; ".join(report_l3.trace.execution_errors[:3])
+        )
     remediation_steps = list(dict.fromkeys(m.remediation for m in all_findings if m.remediation))
 
     layers_executed = ["L1", "L3"] if report_l2 is None else ["L1", "L2", "L3"]

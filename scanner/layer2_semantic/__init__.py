@@ -75,10 +75,20 @@ class Layer2Analyzer:
         # If client=None and no ANTHROPIC_API_KEY, AnthropicJudgeClient raises ValueError —
         # that's intentional (configuration error, not a runtime API failure).
         if client is None:
-            client = AnthropicJudgeClient()
+            try:
+                client = AnthropicJudgeClient()
+            except ValueError as e:
+                if local_model_path is None:
+                    raise e
+                logger.warning(f"Anthropic API key not found. Only local LLM will be used. ({e})")
+                client = None
         self._client = client
-        self._injection_detector = PromptInjectionDetector(client=client)
-        self._consistency_checker = ConsistencyChecker(client=client)
+        if self._client is not None:
+            self._injection_detector = PromptInjectionDetector(client=client)
+            self._consistency_checker = ConsistencyChecker(client=client)
+        else:
+            self._injection_detector = None
+            self._consistency_checker = None
 
         # Optional local pre-filter (lazy-loaded inside LocalLLMJudge on first call)
         self._local_judge = None
@@ -101,6 +111,9 @@ class Layer2Analyzer:
         On LLMJudgeError (API exhaustion), logs a warning and returns a
         minimal report with llm_judge_verdict=None (fail-open).
         """
+        local_verdict: str | None = None
+        local_conf: float | None = None
+
         # ── Local model pre-filter ─────────────────────────────────────────────
         if self._local_judge is not None:
             try:
@@ -108,6 +121,10 @@ class Layer2Analyzer:
                     _PI_SYSTEM_PROMPT,
                     wrap_untrusted(manifest.all_untrusted_text),
                 )
+                if local_response.verdict != "PARSE_ERROR":
+                    local_verdict = local_response.verdict
+                    local_conf = local_response.confidence
+
                 if self._local_judge.is_confident(local_response):
                     logger.debug(
                         "LocalLLMJudge: confident verdict=%s (%.2f) — skipping Haiku",
@@ -128,12 +145,35 @@ class Layer2Analyzer:
                 )
 
         # ── Full Haiku pipeline ────────────────────────────────────────────────
+        if self._client is None or self._injection_detector is None or self._consistency_checker is None:
+            logger.warning("No Anthropic client available for Layer 2 escalation — failing open.")
+            return RiskReport_L2(
+                injection_matches=[],
+                llm_judge_verdict=None,
+                llm_judge_confidence=None,
+                llm_judge_attack_types=[],
+                llm_judge_evidence_summary=None,
+                llm_tokens_used=0,
+                description_code_mismatch=False,
+                permission_delta_critical=False,
+                field_risk_scores={},
+                local_model_used=self._local_judge is not None,
+                local_model_escalated=True,
+                local_model_verdict=local_verdict,
+                local_model_confidence=local_conf,
+            )
+
         try:
             report = self._run_analysis(manifest, l1_report)
             # Tag with local model metadata if we got here via escalation
             if self._local_judge is not None:
                 return report.model_copy(
-                    update={"local_model_used": True, "local_model_escalated": True}
+                    update={
+                        "local_model_used": True, 
+                        "local_model_escalated": True,
+                        "local_model_verdict": local_verdict,
+                        "local_model_confidence": local_conf
+                    }
                 )
             return report
         except LLMJudgeError as exc:
@@ -154,6 +194,8 @@ class Layer2Analyzer:
                 field_risk_scores={},
                 local_model_used=self._local_judge is not None,
                 local_model_escalated=self._local_judge is not None,
+                local_model_verdict=local_verdict,
+                local_model_confidence=local_conf,
             )
 
     def _build_report_from_local(
@@ -180,6 +222,8 @@ class Layer2Analyzer:
             field_risk_scores={},
             local_model_used=True,
             local_model_escalated=escalated,
+            local_model_verdict=response.verdict if response.verdict != "PARSE_ERROR" else None,
+            local_model_confidence=response.confidence if response.verdict != "PARSE_ERROR" else None,
         )
 
     def _run_analysis(

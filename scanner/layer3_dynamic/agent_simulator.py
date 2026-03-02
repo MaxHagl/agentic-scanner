@@ -141,6 +141,10 @@ class AgentSimulationResult:
     inputs_used: list[str]
     """Which synthetic user inputs were sent (for audit/logging)."""
 
+    skipped_by_local_model: bool = False
+    """True when the L3 local-model gate determined the README was confidently
+    BENIGN and bypassed AgentSimulator entirely (no Haiku API calls made)."""
+
 
 # ─── AgentSimulator ───────────────────────────────────────────────────────────
 

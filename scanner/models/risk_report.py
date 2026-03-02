@@ -112,6 +112,8 @@ class RiskReport_L2(BaseModel):
     field_risk_scores: dict[str, float] = Field(default_factory=dict)
     local_model_used: bool = False
     local_model_escalated: bool = False
+    local_model_verdict: str | None = None
+    local_model_confidence: float | None = None
 
     @computed_field
     @property
@@ -139,6 +141,7 @@ class ExecutionTrace(BaseModel):
     exit_code: int = 0
     oom_killed: bool = False
     timeout_killed: bool = False
+    execution_errors: list[str] = Field(default_factory=list)
 
 
 class RiskReport_L3(BaseModel):
@@ -155,6 +158,15 @@ class RiskReport_L3(BaseModel):
     # Agent simulation metadata (populated by _run_agent_simulation path only)
     agent_simulation_executed: bool = False
     agent_tool_call_count: int = 0
+    agent_sim_skipped_by_local_model: bool = False
+    """True when the L3 local-model gate determined the README was confidently
+    BENIGN and the AgentSimulator API calls were skipped entirely."""
+
+    @computed_field
+    @property
+    def execution_failed(self) -> bool:
+        """True when the harness could not load the target module (e.g. missing deps)."""
+        return bool(self.trace.execution_errors)
 
     @computed_field
     @property

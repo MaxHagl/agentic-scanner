@@ -62,7 +62,7 @@ class LocalLLMJudge:
         self,
         adapter_path: str | Path,
         confidence_threshold: float = 0.80,
-        max_new_tokens: int = 128,   # JSON outputs are short; 256 wastes activation memory
+        max_new_tokens: int = 512,
     ) -> None:
         self._adapter_path = Path(adapter_path)
         self._threshold = confidence_threshold
@@ -242,7 +242,12 @@ class LocalLLMJudge:
             add_generation_prompt=True,
         )
 
-        inputs = self._tokenizer(prompt, return_tensors="pt").to(self._device)
+        inputs = self._tokenizer(
+            prompt, 
+            return_tensors="pt",
+            truncation=True,
+            max_length=4096
+        ).to(self._device)
 
         with self._torch.no_grad():
             outputs = self._model.generate(
@@ -251,9 +256,20 @@ class LocalLLMJudge:
                 do_sample=False,
                 temperature=1.0,  # do_sample=False makes temp irrelevant; explicit for clarity
                 pad_token_id=self._tokenizer.eos_token_id,
-                use_cache=False,  # avoids DynamicCache.seen_tokens AttributeError on transformers>=4.44
             )
 
         # Decode only newly generated tokens (not the prompt)
         generated_ids = outputs[0][inputs["input_ids"].shape[1]:]
-        return self._tokenizer.decode(generated_ids, skip_special_tokens=True)
+        result_text = self._tokenizer.decode(generated_ids, skip_special_tokens=True)
+        
+        # Free up MPS/GPU memory
+        del inputs
+        del outputs
+        import gc
+        gc.collect()
+        if self._device.type == "mps":
+            self._torch.mps.empty_cache()
+        elif self._device.type == "cuda":
+            self._torch.cuda.empty_cache()
+            
+        return result_text

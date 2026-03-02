@@ -111,6 +111,39 @@ try:
 except Exception as _e:
     _LOG["errors"].append("ctypes patch error: " + str(_e))
 
+# ── Stub common network libraries so missing deps don't block execution ────────
+import sys as _sys, types as _types
+
+def _make_http_stub(lib_name):
+    _m = _types.ModuleType(lib_name)
+    def _call(method, url, **kw):
+        entry = method.upper() + " " + str(url)
+        _LOG["network_connect_attempts"].append(entry)
+        if "connect" not in _LOG["syscalls_observed"]:
+            _LOG["syscalls_observed"].append("connect")
+        raise ConnectionRefusedError("[harness] " + lib_name + "." + method + " blocked: " + str(url))
+    class _Session:
+        def request(self, m, url, **kw): return _call(m, url, **kw)
+        def get(self, url, **kw):    return _call("GET", url, **kw)
+        def post(self, url, **kw):   return _call("POST", url, **kw)
+        def put(self, url, **kw):    return _call("PUT", url, **kw)
+        def delete(self, url, **kw): return _call("DELETE", url, **kw)
+        def patch(self, url, **kw):  return _call("PATCH", url, **kw)
+        def __enter__(self): return self
+        def __exit__(self, *a): pass
+    _m.get     = lambda url, **kw: _call("GET", url, **kw)
+    _m.post    = lambda url, **kw: _call("POST", url, **kw)
+    _m.put     = lambda url, **kw: _call("PUT", url, **kw)
+    _m.delete  = lambda url, **kw: _call("DELETE", url, **kw)
+    _m.patch   = lambda url, **kw: _call("PATCH", url, **kw)
+    _m.request = lambda m, url, **kw: _call(m, url, **kw)
+    _m.Session = _Session
+    return _m
+
+for _lib in ("requests", "httpx", "urllib3"):
+    if _lib not in _sys.modules:
+        _sys.modules[_lib] = _make_http_stub(_lib)
+
 # ── Capture stdout for entropy measurement ────────────────────────────────────
 _real_stdout = sys.stdout
 _cap = io.StringIO()
@@ -327,4 +360,5 @@ class DockerSandboxExecutor:
             exit_code=exit_code,
             oom_killed=oom_killed,
             timeout_killed=timeout_killed,
+            execution_errors=log.get("errors", []),
         )
