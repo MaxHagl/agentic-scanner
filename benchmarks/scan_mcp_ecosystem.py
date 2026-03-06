@@ -259,7 +259,10 @@ def scan_repo(
                 worst_state = (state[0], state[1], idx) if state else None
 
     # ── Python source files ──
-    for py_path in repo_dir.rglob("*.py"):
+    _PYTHON_CAP = 100
+    py_files = sorted(repo_dir.rglob("*.py"))
+    py_files.sort(key=lambda p: len(p.parts))
+    for py_path in py_files[:_PYTHON_CAP]:
         if not py_path.is_file():
             continue
         # Skip test files as specified in the plan
@@ -596,9 +599,20 @@ def main() -> None:
         help="Stop after N repos",
     )
     parser.add_argument(
+        "--local-model",
+        type=str,
+        default=None,
+        help="Path to local LoRA adapter to use for L2 classification",
+    )
+    parser.add_argument(
         "--resume",
         action="store_true",
         help="Skip repos already recorded in checkpoint.jsonl",
+    )
+    parser.add_argument(
+        "--high-security",
+        action="store_true",
+        help="Force LLM analysis (Layer 2) to escalate to Haiku regardless of local model confidence",
     )
     parser.add_argument(
         "--source-url",
@@ -620,11 +634,16 @@ def main() -> None:
     # ── L2 setup ──
     l2_analyzer: Layer2Analyzer | None = None
     if args.semantic:
-        if not os.environ.get("ANTHROPIC_API_KEY"):
-            logger.error("--semantic requires ANTHROPIC_API_KEY to be set")
+        if not os.environ.get("ANTHROPIC_API_KEY") and not args.local_model:
+            logger.error("--semantic requires ANTHROPIC_API_KEY or --local-model")
             return
         logger.info("L2 semantic analysis enabled (runs only on WARN/BLOCK repos)")
-        l2_analyzer = Layer2Analyzer()
+        model_path = Path(args.local_model) if args.local_model else None
+        applied_threshold = 1.01 if args.high_security else 0.80
+        l2_analyzer = Layer2Analyzer(
+            local_model_path=model_path,
+            escalation_threshold=applied_threshold,
+        )
 
     # ── Fetch repo list ──
     try:

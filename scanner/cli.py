@@ -660,6 +660,17 @@ def main() -> None:
     ),
 )
 @click.option(
+    "--slm-model",
+    type=click.Path(path_type=Path),
+    default=None,
+    help=(
+        "Path to the from-scratch 350M RoPE SLM directory for Layer 2 pre-filtering "
+        "(requires --semantic). Uses zero external pretrained weights — supply-chain safe. "
+        "Escalates to Haiku when confidence < --escalation-threshold. "
+        "Takes priority over --local-model when both are specified."
+    ),
+)
+@click.option(
     "--high-security",
     is_flag=True,
     default=False,
@@ -678,6 +689,7 @@ def scan_command(
     local_model: Path | None,
     escalation_threshold: float,
     l3_local_gate: bool,
+    slm_model: Path | None,
     high_security: bool,
 ) -> None:
     console = Console(record=True)
@@ -711,10 +723,10 @@ def scan_command(
 
         l2_report = None
         if semantic:
-            if not os.environ.get("ANTHROPIC_API_KEY") and local_model is None:
+            if not os.environ.get("ANTHROPIC_API_KEY") and local_model is None and slm_model is None:
                 console.print(
-                    "[bold yellow]Warning:[/bold yellow] --semantic requires ANTHROPIC_API_KEY "
-                    "or a --local-model to be set. Skipping Layer 2."
+                    "[bold yellow]Warning:[/bold yellow] --semantic requires ANTHROPIC_API_KEY, "
+                    "--local-model, or --slm-model to be set. Skipping Layer 2."
                 )
             else:
                 if local_model is not None and not local_model.exists():
@@ -723,11 +735,18 @@ def scan_command(
                         f"{local_model}. Ignoring local model."
                     )
                     local_model = None
+                if slm_model is not None and not slm_model.exists():
+                    console.print(
+                        f"[bold yellow]Warning:[/bold yellow] --slm-model path does not exist: "
+                        f"{slm_model}. Ignoring SLM model."
+                    )
+                    slm_model = None
                 from scanner.layer2_semantic import Layer2Analyzer
                 applied_threshold = 1.01 if high_security else escalation_threshold
                 analyzer = Layer2Analyzer(
                     local_model_path=local_model,
                     escalation_threshold=applied_threshold,
+                    slm_model_path=slm_model,
                 )
                 l2_report = analyzer.analyze(manifest, l1_report)
 

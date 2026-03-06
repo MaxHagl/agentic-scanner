@@ -13,12 +13,14 @@ All notes relevant to writing the research paper on the agentic-scanner project.
 | `07-future-work.md` | Layers 2 & 3, open research questions |
 | `08-key-contributions.md` | Summary of novel contributions for the paper |
 | `09-local-llm-finetuning.md` | Local LLM finetuning — model selection, training, memory fixes, eval results |
+| `12-slm-architecture-considerations.md` | Architecture options for from-scratch SLM — encoder vs decoder, disentangled attention, scale (110M vs 350M), training objective, tokenizer |
 
-## Quick Stats (as of 2026-03-02)
+## Quick Stats (as of 2026-03-05)
 - Fixtures: **101** (MCP: 10, LangChain/LangGraph: **6**, README: **7**, Layer2: 3, Adversarial E-series: **20**, Benign: **55**)
-- Tests: **326** passing, 4 deselected (live API tests)
+- Tests: **328** passing, 4 deselected (live API tests)
 - **Full 3-layer live validation (2026-03-02):** E019 with --semantic --dynamic --local-model → verdict WARN, l1=0.0, l2=0.4893 (local LoRA only, 0 Haiku calls), l3=0.9123, fused=0.4672, scan=4.25s
-- New modules: `finetuning/` package (data_pipeline.py, augmentor.py, train.py, evaluate.py) + `scanner/layer2_semantic/local_judge.py`
+- **From-scratch 350M SLM smoke test (2026-03-05):** Full pipeline validated: corpus→tokenizer→pretrain→finetune→eval→CLI. Accuracy 92.3% (pass > 50%), 0 API tokens consumed. See `09-local-llm-finetuning.md`.
+- New modules: `finetuning/` package (data_pipeline.py, augmentor.py, train.py, evaluate.py, collect_pretrain_corpus.py, train_tokenizer.py, pretrain.py, train_classifier.py, evaluate_slm.py, model.py) + `scanner/layer2_semantic/local_judge.py` + `scanner/layer2_semantic/slm_judge.py`
 - L1 full benchmark (81 fixtures, 22 malicious + 4 L2-only + **55 benign**): **Precision 100%, Recall 100%, F1 100%, FPR 0.0%**
 - Adversarial L1 benchmark (E001–E020): BLOCK=3/20, WARN=1/20, SAFE=16/20 (20% L1-only detection rate)
 - L1+L2 adversarial (E001–E020): **100% detection (20/20)** — live run 2026-02-28; all MALICIOUS 95–98%

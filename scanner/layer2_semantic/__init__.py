@@ -12,6 +12,10 @@ Optionally uses a finetuned local LoRA model as a fast pre-filter:
     analyzer = Layer2Analyzer(local_model_path="finetuning/adapter")
     # → runs local model first; escalates to Haiku only when uncertain
 
+Optionally uses the from-scratch 350M RoPE SLM (no external pretrained weights):
+    analyzer = Layer2Analyzer(slm_model_path="finetuning/security_slm/")
+    # → single forward pass classifier; escalates to Haiku when uncertain
+
 Usage:
     analyzer = Layer2Analyzer()          # needs ANTHROPIC_API_KEY in env
     report = analyzer.analyze(manifest, l1_report)
@@ -70,15 +74,17 @@ class Layer2Analyzer:
         client: AnthropicJudgeClient | None = None,
         local_model_path: str | Path | None = None,
         escalation_threshold: float = 0.80,
+        slm_model_path: str | Path | None = None,
     ) -> None:
         # Build one shared client; sub-analyzers get the same instance.
         # If client=None and no ANTHROPIC_API_KEY, AnthropicJudgeClient raises ValueError —
         # that's intentional (configuration error, not a runtime API failure).
+        _has_local = local_model_path is not None or slm_model_path is not None
         if client is None:
             try:
                 client = AnthropicJudgeClient()
             except ValueError as e:
-                if local_model_path is None:
+                if not _has_local:
                     raise e
                 logger.warning(f"Anthropic API key not found. Only local LLM will be used. ({e})")
                 client = None
@@ -90,9 +96,14 @@ class Layer2Analyzer:
             self._injection_detector = None
             self._consistency_checker = None
 
-        # Optional local pre-filter (lazy-loaded inside LocalLLMJudge on first call)
+        # Optional local pre-filter: LoRA adapter (legacy) OR from-scratch SLM (new).
+        # If both are provided, the SLM takes priority (no external weights).
         self._local_judge = None
-        if local_model_path is not None:
+        if slm_model_path is not None:
+            from scanner.layer2_semantic.slm_judge import SecuritySLMJudge
+            self._local_judge = SecuritySLMJudge(slm_model_path, escalation_threshold)
+            logger.info("Layer2Analyzer: using from-scratch SLM pre-filter (%s)", slm_model_path)
+        elif local_model_path is not None:
             from scanner.layer2_semantic.local_judge import LocalLLMJudge
             self._local_judge = LocalLLMJudge(local_model_path, escalation_threshold)
 
