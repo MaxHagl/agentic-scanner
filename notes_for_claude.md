@@ -16,10 +16,13 @@ Before adding new features, address these existing technical debts:
 
 ### Layer 1 (`scanner/layer1_static/ast_scanner.py`)
 1.  **Incomplete AST Obfuscation Checks:** The `_string_concat_resolves_to` function easily breaks on nested f-strings or complex AST constructs. We need to implement a lightweight symbolic execution engine or SSA form here to catch advanced `getattr(builtins, 'ex' + chr(101) + 'c')` attacks.
+    *   *Potential Fix:* Implement a pre-processing pass using `ast.NodeTransformer` that performs aggressive constant folding across the entire tree, flattening complex `ast.BinOp` or nested `ast.JoinedStr` nodes into single `ast.Constant` strings before `_check_call` runs.
 2.  **`os.environ` Over-Permission:** `os.environ` and `os.getenv` trigger `ENV_READ` globally, but there is no mechanism to scope permissions to *specific* variables (e.g., a tool needing `OPENAI_API_KEY` shouldn't be granted full `ENV_READ`). This needs a capability-scoping refactor.
+    *   *Potential Fix:* Modify the `Permission` system to allow parameterized scopes (e.g., `Permission.ENV_READ.with_arg("OPENAI_API_KEY")`). Have `ast_scanner.py` parse `node.args[0]` on `os.getenv` calls to extract the exact string literal being read and check the specific permission delta.
 
 ### Layer 2 (`scanner/layer2_semantic/__init__.py`)
 1.  **Failing Open is Dangerous:** Currently, if the API rate-limits or fails (`LLMJudgeError`), the `Layer2Analyzer` fails *open* (returning `RiskReport_L2` with `llm_judge_verdict=None`). In a true security product, failing open on a deep-inspection layer is a critical flaw. We need to introduce a strict `fail_closed=True/False` fallback policy in the CLI.
+    *   *Potential Fix:* Plumb a `fail_closed` parameter from `cli.py` down to `Layer2Analyzer`. In the `except LLMJudgeError` block, if `fail_closed=True`, return a report with `llm_judge_verdict="BLOCK"` and `llm_judge_confidence=1.0` to force the Aggregator to halt execution.
 
 ## 3. Context Payload Guidelines (Token Optimization)
 - **Do not read `tests/fixtures/` unless requested.** It contains thousands of lines of payload strings that will wreck your context limit.
