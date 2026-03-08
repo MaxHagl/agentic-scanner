@@ -83,6 +83,14 @@ _DESERIALIZATION_FUNCS = {
     "dill.loads", "dill.load",
 }
 
+# Encoding names that are used for obfuscation in codecs.decode/encode chains.
+# rot_13 / base64 / hex_codec have no legitimate runtime use in security-sensitive code.
+_CODECS_OBFUSC_ENCODINGS = {"rot_13", "rot13", "base64", "hex_codec", "zlib_codec", "bz2_codec"}
+
+# Dangerous call targets that, when fed a codecs-decoded variable, trigger OBFUSC-003.
+_OBFUSC003_SINKS = {"exec", "eval"}
+_OBFUSC003_OS_SINKS = {"system", "popen"}
+
 
 def _shannon_entropy(s: str) -> float:
     """Shannon entropy in bits/char. Returns 0.0 for empty strings."""
@@ -195,6 +203,8 @@ class ASTScanState:
     undeclared_network_access: bool = False
     import_aliases: dict[str, str] = field(default_factory=dict)
     """Maps alias → real module/function path (e.g. {"r": "requests", "fetch": "requests.get"})."""
+    codecs_decoded_vars: set[str] = field(default_factory=set)
+    """Variable names assigned from a codecs.decode/encode call with an obfuscation encoding."""
 
 
 # ── ASTScanner class ──────────────────────────────────────────────────────────
@@ -249,6 +259,7 @@ class ASTScanner:
             if isinstance(node, ast.Assign):
                 self._check_os_environ_write(node, state)
                 self._check_high_entropy_string_node(node.value, path, state)
+                self._check_codecs_decode_assignment(node, path, state)
                 continue
 
             if isinstance(node, ast.Return) and node.value is not None:
@@ -312,6 +323,48 @@ class ASTScanner:
                     and target.value.attr == "environ"
                 ):
                     state.exercised_permissions.add(Permission.ENV_WRITE)
+
+    def _check_codecs_decode_assignment(
+        self,
+        node: ast.Assign,
+        path: Path,
+        state: ASTScanState,
+    ) -> None:
+        """Detect: var = codecs.decode(payload, 'rot_13') and record target names.
+
+        If the codecs call is immediately passed to exec/eval/os.system in the
+        same assignment (rare but possible via nested call), fire OBFUSC-003 inline.
+        Otherwise record the target variable names in state.codecs_decoded_vars
+        so _check_call() can fire OBFUSC-003 when they appear as arguments later.
+        """
+        if not isinstance(node.value, ast.Call):
+            return
+        call = node.value
+        call_name_str = _call_name(call)
+        if call_name_str not in {"codecs.decode", "codecs.encode"}:
+            return
+
+        # Check the encoding argument: positional arg[1] or keyword 'encoding'
+        encoding_val: str | None = None
+        if len(call.args) >= 2:
+            encoding_val = _string_concat_resolves_to(call.args[1])
+        if encoding_val is None:
+            for kw in call.keywords:
+                if kw.arg == "encoding":
+                    encoding_val = _string_concat_resolves_to(kw.value)
+                    break
+
+        if encoding_val is None or encoding_val.lower() not in _CODECS_OBFUSC_ENCODINGS:
+            return
+
+        # Record all Name targets so _check_call can fire OBFUSC-003 later
+        for target in node.targets:
+            if isinstance(target, ast.Name):
+                state.codecs_decoded_vars.add(target.id)
+            elif isinstance(target, (ast.Tuple, ast.List)):
+                for elt in target.elts:
+                    if isinstance(elt, ast.Name):
+                        state.codecs_decoded_vars.add(elt.id)
 
     # ── Call checks ───────────────────────────────────────────────────────────
 
@@ -392,6 +445,20 @@ class ASTScanner:
         # Unsafe deserialization → PE-009
         if call_name in _DESERIALIZATION_FUNCS:
             state.matches.append(self._match("PE-009", evidence=[ev]))
+
+        # OBFUSC-003: codecs-decoded variable passed to exec/eval/os.system
+        # Handles: x = codecs.decode(p,'rot_13'); exec(x)  or  os.system(x)
+        if state.codecs_decoded_vars:
+            _is_exec_sink = call_name in _OBFUSC003_SINKS
+            _is_os_sink = (
+                call_name.startswith("os.")
+                and call_name.split(".")[-1] in _OBFUSC003_OS_SINKS
+            )
+            if _is_exec_sink or _is_os_sink:
+                for arg in node.args:
+                    if isinstance(arg, ast.Name) and arg.id in state.codecs_decoded_vars:
+                        state.matches.append(self._match("OBFUSC-003", evidence=[ev]))
+                        break
 
         # getattr obfusc check for named calls too
         self._check_getattr_obfusc(node, path, state)

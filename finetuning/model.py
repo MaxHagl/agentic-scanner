@@ -30,6 +30,8 @@ Usage:
     model = SecurityClassifier(config)
     model.save(Path("finetuning/security_slm_smoke"))
     loaded = SecurityClassifier.load(Path("finetuning/security_slm_smoke"))
+
+    
 """
 
 from __future__ import annotations
@@ -89,7 +91,10 @@ class SecurityEncoderConfig:
     @classmethod
     def load(cls, path: Path) -> "SecurityEncoderConfig":
         data = json.loads(path.read_text(encoding="utf-8"))
-        return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
+        # Old checkpoints don't have num_attack_types — default to 0 (no head) for compat.
+        filtered = {k: v for k, v in data.items() if k in cls.__dataclass_fields__}
+        filtered.setdefault("num_attack_types", 0)
+        return cls(**filtered)
 
 
 # ── RoPE utilities ────────────────────────────────────────────────────────────

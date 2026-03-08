@@ -139,6 +139,27 @@ rules:
       BLOCK. Decode and analyze the payload. Treat the decoded content as the
       actual attack surface for further analysis.
 
+  - id: OBFUSC-003
+    name: "codecs.decode Encoding + exec/eval/os.system Chain"
+    severity: CRITICAL
+    attack_vector: T4_PRIVILEGE_ESCALATION
+    detection:
+      type: ast_pattern_chain
+      # Detects: decoded = codecs.decode(payload, 'rot_13'); exec(decoded)
+      chain:
+        - {call: [codecs.decode, codecs.encode]}
+        - {encoding_arg_is_one_of: [rot_13, rot13, base64, hex_codec, zlib_codec, bz2_codec]}
+        - {result_passed_to: [exec, eval, os.system, os.popen]}
+    base_confidence: 0.95
+    rationale: >
+      codecs.decode(string, 'rot_13') is a trivial string-evasion technique that
+      obscures payloads from naive string-matching detectors. The combination
+      codecs.decode + exec/eval/os.system has no legitimate use. Unlike OBFUSC-001
+      (inline chain), this pattern requires cross-statement taint tracking.
+    remediation: >
+      BLOCK. Decode the payload and treat it as the actual attack surface.
+    tags: [obfuscation, rot13, codecs, rce]
+
   - id: OBFUSC-002
     name: "String Concatenation of Dangerous Function Name"
     severity: MEDIUM

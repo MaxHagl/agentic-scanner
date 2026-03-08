@@ -107,16 +107,21 @@ class LocalLLMJudge:
                 tokens_used=0,
             )
 
-    def is_confident(self, response: JudgeResponse) -> bool:
+    def is_confident(self, response: JudgeResponse, input_text: str = "") -> bool:
         """
         Return True if the local model verdict should be used directly
         (no escalation to Haiku).
 
         Returns False when:
           - verdict == "PARSE_ERROR" (always escalate on parse failure)
+          - verdict != "CLEAN" (SUSPICIOUS/MALICIOUS always escalate so Haiku can
+            confirm true positives or downgrade false positives)
           - confidence < threshold
         """
         if response.verdict == "PARSE_ERROR":
+            return False
+        # Asymmetric gate: only CLEAN verdicts can bypass Haiku.
+        if response.verdict != "CLEAN":
             return False
         return response.confidence >= self._threshold
 

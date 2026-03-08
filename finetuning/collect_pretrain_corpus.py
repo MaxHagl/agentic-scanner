@@ -377,14 +377,14 @@ def _iter_text_files(root: Path, extensions: tuple[str, ...]) -> Iterator[str]:
 # ── S8: Exploit-DB Python exploit scripts ─────────────────────────────────────
 
 _EXPLOITDB_CSV_URL = (
-    "https://raw.githubusercontent.com/offensive-security/exploitdb/master/files_exploits.csv"
+    "https://gitlab.com/exploit-database/exploitdb/-/raw/main/files_exploits.csv"
 )
 _EXPLOITDB_RAW_BASE = (
-    "https://raw.githubusercontent.com/offensive-security/exploitdb/master/"
+    "https://gitlab.com/exploit-database/exploitdb/-/raw/main/"
 )
 
 
-def _collect_exploit_db(max_py: int = 3000, page_delay: float = 0.3) -> Iterator[str]:
+def _collect_exploit_db(max_py: int = 3000, page_delay: float = 1.5) -> Iterator[str]:
     """Yield Python exploit scripts from Exploit-DB.
 
     Fetches files_exploits.csv, filters for Python scripts, downloads each one.
@@ -634,80 +634,66 @@ def _collect_mitre_attack() -> Iterator[str]:
 
 # ── S13: OSV advisories bulk download ─────────────────────────────────────────
 
+# OSV provides public GCS bulk download — one zip per ecosystem, no auth needed.
+# Each zip contains one JSON file per advisory.
+_OSV_BULK_BASE = "https://osv-vulnerabilities.storage.googleapis.com/{ecosystem}/all.zip"
 _OSV_ECOSYSTEMS = ["PyPI", "npm", "Go", "RubyGems", "Maven", "crates.io"]
-_OSV_QUERY_URL = "https://api.osv.dev/v1/query"
 
 
-def _collect_osv(max_per_ecosystem: int = 2000, page_delay: float = 1.0) -> Iterator[str]:
+def _collect_osv(max_per_ecosystem: int = 5000) -> Iterator[str]:
     """Yield OSV advisory descriptions across major package ecosystems.
 
-    Uses the OSV query API with pagination.
+    Uses the OSV GCS bulk download (one zip per ecosystem) — no API key needed,
+    no rate limits, no pagination.  Each zip contains ~hundreds to thousands of
+    individual JSON advisory files.
     """
     total = 0
     for ecosystem in _OSV_ECOSYSTEMS:
-        print(f"  [OSV] Fetching {ecosystem} advisories ...", flush=True)
-        page_token = None
+        url = _OSV_BULK_BASE.format(ecosystem=urllib.parse.quote(ecosystem))
+        print(f"  [OSV] Downloading {ecosystem} bulk zip from GCS ...", flush=True)
+        try:
+            raw_zip = _fetch_url(url, timeout=300)
+        except Exception as exc:
+            print(f"  [OSV] WARN: download failed for {ecosystem} ({exc}) — skipping", flush=True)
+            continue
+
+        print(f"  [OSV] {ecosystem}: {len(raw_zip):,} bytes — parsing ...", flush=True)
         eco_count = 0
+        try:
+            with zipfile.ZipFile(io.BytesIO(raw_zip)) as zf:
+                names = [n for n in zf.namelist() if n.endswith(".json")][:max_per_ecosystem]
+                for name in names:
+                    try:
+                        v = json.loads(zf.read(name))
+                    except Exception:
+                        continue
+                    osv_id = v.get("id", "")
+                    summary = (v.get("summary") or "").strip()
+                    details = (v.get("details") or "").strip()
+                    severity = ""
+                    for sev in (v.get("severity") or []):
+                        severity = sev.get("score", "")
+                        break
 
-        while eco_count < max_per_ecosystem:
-            payload: dict = {"query": {"ecosystem": ecosystem}}
-            if page_token:
-                payload["page_token"] = page_token
-            try:
-                req_data = json.dumps(payload).encode()
-                req = urllib.request.Request(
-                    _OSV_QUERY_URL,
-                    data=req_data,
-                    headers={
-                        "Content-Type": "application/json",
-                        "User-Agent": "agentic-scanner/1.0 (security research)",
-                    },
-                    method="POST",
-                )
-                with urllib.request.urlopen(req, timeout=30) as resp:
-                    result = json.loads(resp.read())
-            except Exception as exc:
-                print(f"  [OSV] WARN: query failed for {ecosystem}: {exc}", flush=True)
-                break
-
-            vulns = result.get("vulns", [])
-            if not vulns:
-                break
-
-            for v in vulns:
-                if eco_count >= max_per_ecosystem:
-                    break
-                osv_id = v.get("id", "")
-                summary = (v.get("summary") or "").strip()
-                details = (v.get("details") or "").strip()
-                severity = ""
-                for sev in (v.get("severity") or []):
-                    severity = sev.get("score", "")
-                    break
-
-                parts = []
-                if osv_id:
-                    parts.append(osv_id)
-                if ecosystem:
+                    parts = []
+                    if osv_id:
+                        parts.append(osv_id)
                     parts.append(f"[{ecosystem}]")
-                if severity:
-                    parts.append(f"CVSS:{severity}")
-                if summary:
-                    parts.append(summary)
-                if details:
-                    parts.append(details[:1500])
+                    if severity:
+                        parts.append(f"CVSS:{severity}")
+                    if summary:
+                        parts.append(summary)
+                    if details:
+                        parts.append(details[:1500])
 
-                if parts:
-                    line = _clean_text(" ".join(parts))
-                    if line:
-                        yield line
-                        eco_count += 1
-                        total += 1
-
-            page_token = result.get("next_page_token")
-            if not page_token:
-                break
-            time.sleep(page_delay)
+                    if parts:
+                        line = _clean_text(" ".join(parts))
+                        if line:
+                            yield line
+                            eco_count += 1
+                            total += 1
+        except Exception as exc:
+            print(f"  [OSV] WARN: zip parse error for {ecosystem} ({exc})", flush=True)
 
         print(f"  [OSV] {ecosystem}: {eco_count} advisories", flush=True)
 
@@ -742,7 +728,7 @@ def _collect_owasp() -> Iterator[str]:
 # ── S19: PyPI top-package descriptions ────────────────────────────────────────
 
 _PYPI_JSON_URL = "https://pypi.org/pypi/{name}/json"
-_TOP_PYPI_LIST_URL = "https://huggingface.co/datasets/librarian-bots/top-pypi-packages/resolve/main/top-pypi-packages-30-days.min.json"
+_PYPI_SIMPLE_URL = "https://pypi.org/simple/"
 
 
 def _collect_pypi_descriptions(n: int = 5000, page_delay: float = 0.2) -> Iterator[str]:
@@ -752,21 +738,20 @@ def _collect_pypi_descriptions(n: int = 5000, page_delay: float = 0.2) -> Iterat
     description text — mixes legitimate tool descriptions with security-
     relevant package metadata.
     """
-    # Fetch top packages list
-    print(f"  [PyPI] Fetching top packages list ...", flush=True)
+    # Fetch package list from PyPI simple index (HTML with all package names)
+    print(f"  [PyPI] Fetching package list from PyPI simple index ...", flush=True)
+    package_names: list[str] = []
     try:
-        raw = _fetch_url(_TOP_PYPI_LIST_URL, timeout=60)
-        data = json.loads(raw)
-        package_names = [r.get("project", "") for r in data.get("rows", []) if r.get("project")]
-    except Exception:
-        # Fallback: well-known security-relevant packages
+        raw = _fetch_url(_PYPI_SIMPLE_URL, timeout=120)
+        # Simple index is HTML: <a href="/simple/pkg/">pkg</a>
+        package_names = re.findall(r'href="[^"]+">([^<]+)</a>', raw.decode("utf-8", errors="replace"))
+    except Exception as exc:
+        print(f"  [PyPI] WARN: simple index fetch failed ({exc}) — using fallback list", flush=True)
         package_names = [
-            "requests", "cryptography", "paramiko", "pycparser", "cffi",
-            "pyopenssl", "certifi", "urllib3", "httpx", "aiohttp",
-            "flask", "django", "fastapi", "sqlalchemy", "celery",
-            "boto3", "google-cloud-storage", "azure-identity",
-            "pyjwt", "bcrypt", "passlib", "python-dotenv",
-            "bandit", "safety", "semgrep", "pylint", "mypy",
+            "requests", "cryptography", "paramiko", "urllib3", "httpx", "aiohttp",
+            "flask", "django", "fastapi", "sqlalchemy", "celery", "boto3",
+            "pyjwt", "bcrypt", "passlib", "python-dotenv", "bandit", "safety",
+            "semgrep", "pylint", "mypy", "cffi", "pyopenssl", "certifi",
         ]
 
     package_names = [p for p in package_names if p][:n]

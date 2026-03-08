@@ -136,7 +136,7 @@ class Layer2Analyzer:
                     local_verdict = local_response.verdict
                     local_conf = local_response.confidence
 
-                if self._local_judge.is_confident(local_response):
+                if self._local_judge.is_confident(local_response, manifest.all_untrusted_text):
                     logger.debug(
                         "LocalLLMJudge: confident verdict=%s (%.2f) — skipping Haiku",
                         local_response.verdict,

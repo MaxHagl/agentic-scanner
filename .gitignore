@@ -1,6 +1,9 @@
 __pycache__/
 .venv/
 *.pyc
+*.pt
+*.bin
+*.safetensors
 .env
 .env.*
 dist/
@@ -19,12 +22,15 @@ finetuning/data/*.jsonl
 finetuning/pretrain_corpus_full/
 finetuning/pretrain_corpus_medium/
 finetuning/pretrain_corpus_smoke/
-finetuning/pretrained_medium/
+
 finetuning/pretrained_medium_checkpoints/
-finetuning/pretrained_smoke/
+
 finetuning/pretrained_smoke_checkpoints/
 finetuning/security_slm_medium/
 finetuning/security_slm_medium_v2/
 finetuning/security_slm_smoke/
 finetuning/tokenizer_medium/
 finetuning/tokenizer_smoke/
+
+finetuning/pretrained_full_checkpoints/
+finetuning/tokenizer_full/

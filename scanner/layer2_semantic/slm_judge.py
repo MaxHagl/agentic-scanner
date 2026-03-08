@@ -39,6 +39,7 @@ Security invariants (inherited from Layer2Analyzer):
 from __future__ import annotations
 
 import logging
+import re
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -52,6 +53,22 @@ logger = logging.getLogger(__name__)
 
 # Confidence threshold below which we escalate to Haiku
 _DEFAULT_THRESHOLD = 0.80
+
+# Code-domain detection: compiled once at module load.
+# ≥2 independent structural signals required to classify as code domain.
+_CODE_PATTERNS = [
+    re.compile(r"\bimport\s+\w+", re.MULTILINE),           # import os
+    re.compile(r"\bfrom\s+\w[\w.]+\s+import\b"),           # from x import y
+    re.compile(r"\bdef\s+\w+\s*\(", re.MULTILINE),         # def func(
+    re.compile(r"\bclass\s+\w+[\s(:]", re.MULTILINE),      # class Foo:
+    re.compile(r"\bos\.(system|popen|exec)\s*\("),          # os.system(
+    re.compile(r"\bsubprocess\s*[\.\(]"),                   # subprocess.run(
+    re.compile(r"\bexec\s*\("),                             # exec(
+    re.compile(r"\bhttpx?\.(get|post|request)\s*\("),       # requests.post(
+    re.compile(r"\bbase64\s*\."),                           # base64.b64decode
+    re.compile(r"```python", re.IGNORECASE),                # markdown code block
+]
+_CODE_DOMAIN_MIN_HITS = 2  # ≥2 independent signals = code domain
 
 
 class SecuritySLMJudge:
@@ -114,17 +131,37 @@ class SecuritySLMJudge:
                 tokens_used=0,
             )
 
-    def is_confident(self, response: JudgeResponse) -> bool:
+    def is_confident(self, response: JudgeResponse, input_text: str = "") -> bool:
         """
         Return True if the SLM verdict should be used directly (no Haiku escalation).
 
         Returns False when:
           - verdict == "PARSE_ERROR" (always escalate on errors)
+          - verdict != "CLEAN" (SUSPICIOUS/MALICIOUS always escalate so Haiku can
+            confirm true positives or downgrade false positives)
+          - input contains Python code patterns (SLM is domain-shifted on code)
           - confidence < threshold (model is uncertain → escalate)
         """
         if response.verdict == "PARSE_ERROR":
             return False
+        # Asymmetric gate: only CLEAN verdicts can bypass Haiku.
+        # SUSPICIOUS/MALICIOUS escalate so Haiku confirms or downgrades.
+        if response.verdict != "CLEAN":
+            return False
+        # Code-domain guard: SLM trained on advisory prose is unreliable on Python code.
+        if input_text and self._is_code_domain(input_text):
+            logger.debug("SLMJudge: code-domain input with CLEAN verdict — forcing Haiku escalation")
+            return False
         return response.confidence >= self._threshold
+
+    @staticmethod
+    def _is_code_domain(text: str) -> bool:
+        """Return True if the text contains Python code structural signals.
+
+        A single keyword (e.g. 'subprocess' in a README doc description) is not
+        enough — requires ≥2 independent structural pattern hits.
+        """
+        return sum(1 for p in _CODE_PATTERNS if p.search(text)) >= _CODE_DOMAIN_MIN_HITS
 
     # ── Model loading ─────────────────────────────────────────────────────────
 
