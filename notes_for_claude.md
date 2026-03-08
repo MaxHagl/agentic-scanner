@@ -1,20 +1,27 @@
-# Notes for Claude (Token Optimization)
+# Notes for Future Claude Sessions
+*(Read this before modifying the codebase)*
 
-These instructions are intended for Claude (e.g., via Claude Code) when interacting with the `agentic-scanner` repository. Following these will drastically reduce token consumption while maintaining high performance.
+These instructions map out the architectural direction, known flaws in the current implementation, and strict guidelines for modifying `agentic-scanner`.
 
-## 1. Context Payload Management
+## 1. Architectural Strategy & Layer 3 Roadmap
+Our core threat model assumes the **context window is the execution environment**. Static analysis (L1) and Prompt Injection detection (L2) only cover the tool *loading* phase. 
 
-- **Ignore Benchmarks Unless explicitly requested:** The `tests/fixtures/` directory contains thousands of lines of payload strings. Do NOT read any files in `tests/fixtures/` unless you are explicitly asked to debug a failing test or evaluate a new payload. Assume they work otherwise.
-- **Reference Over Inclusion:** `CLAUDE.md` and `THREAT_MODEL.md` contain exhaustive context. If asked about architecture or threat models, read them. For general code editing, you only need the specific python files requested. Do not passively load the threat model into context if you are just fixing a bug in `cli.py`.
+**Layer 3 MUST focus on Runtime Response Validation.** When you implement Layer 3, do not just build a Docker sandbox. You must implement an **Interception Proxy** that analyzes strings returned by the tools *before* they are sent to the LLM context.
+*   **Schema Validation:** Ensure responses match the expected `tools[].inputSchema` (e.g., catching 500 words of injected text returned in what should be a boolean field).
+*   **Semantic Scoring:** Repurpose the `AnthropicJudgeClient` to score tool responses for imperative command injections (e.g., catching "Ignore previous instructions" embedded in search results).
+*   **Behavioral Delta Tracks:** Implement hooks to detect when an agent's planned action drastically shifts immediately after receiving a tool response.
 
-## 2. LLM Judge System Prompt Maintenance
+## 2. Known Flaws in the Current Implementation
+Before adding new features, address these existing technical debts:
 
-Whenever modifying `scanner/layer2_semantic/prompt_injection_detector.py`:
-- Keep the `_SYSTEM_PROMPT` as compressed as possible. You (Claude) already understand concepts like "prompt injection". We do not need a 3-paragraph definition. 
-- Map threat categories strictly to the Enums (`[T2_PROMPT_INJECTION, T3_TOOL_DESC_JAILBREAK, T6_DATA_EXFILTRATION, T7_STATE_POISONING]`) and ask for valid JSON output. Avoid unnecessarily verbose system prompts to save on input tokens during Layer 2 execution.
+### Layer 1 (`scanner/layer1_static/ast_scanner.py`)
+1.  **Incomplete AST Obfuscation Checks:** The `_string_concat_resolves_to` function easily breaks on nested f-strings or complex AST constructs. We need to implement a lightweight symbolic execution engine or SSA form here to catch advanced `getattr(builtins, 'ex' + chr(101) + 'c')` attacks.
+2.  **`os.environ` Over-Permission:** `os.environ` and `os.getenv` trigger `ENV_READ` globally, but there is no mechanism to scope permissions to *specific* variables (e.g., a tool needing `OPENAI_API_KEY` shouldn't be granted full `ENV_READ`). This needs a capability-scoping refactor.
 
-## 3. Data Structure Docstrings
+### Layer 2 (`scanner/layer2_semantic/__init__.py`)
+1.  **Failing Open is Dangerous:** Currently, if the API rate-limits or fails (`LLMJudgeError`), the `Layer2Analyzer` fails *open* (returning `RiskReport_L2` with `llm_judge_verdict=None`). In a true security product, failing open on a deep-inspection layer is a critical flaw. We need to introduce a strict `fail_closed=True/False` fallback policy in the CLI.
 
-When modifying `scanner/models/skill_manifest.py` and `scanner/models/risk_report.py`:
-- Rely on Pydantic type-hints in lieu of massive docstrings. 
-- You do not need to generate verbose 4-line descriptions for every single field when the name `attack_vector: AttackVector` is self-documenting. Clear, concise type definitions are better for both human maintainers and LLM context limits.
+## 3. Context Payload Guidelines (Token Optimization)
+- **Do not read `tests/fixtures/` unless requested.** It contains thousands of lines of payload strings that will wreck your context limit.
+- **Rely on Type-Hints over Docstrings:** `scanner/models/` uses strict Pydantic models. Do not bloat them with 5-line docstrings for self-explanatory Enums. 
+- **System Prompt Compression:** When modifying `scanner/layer2_semantic/prompt_injection_detector.py`, keep `_SYSTEM_PROMPT` hyper-compressed. Map threats strictly to Enums (e.g., `T2_PROMPT_INJECTION`) rather than providing multi-paragraph definitions. You already know what a prompt injection is. Save the input tokens.
